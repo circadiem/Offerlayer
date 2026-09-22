@@ -1,3 +1,6 @@
+// Demo scripts always run in demo mode (public demo keys). Production entrypoints
+// (apps/api, apps/mcp, apps/shopify) must NOT set this — they fail closed.
+process.env.OFFERLAYER_DEMO ??= "1";
 import { createHmac } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

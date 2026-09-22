@@ -190,6 +190,9 @@ export function seedDatabase(handle = openDatabase()): {
 }
 
 function main(): void {
+  // `pnpm seed` is a demo affordance (public demo keys). Production deploys
+  // seed through their own entrypoint with real secrets, never this CLI.
+  process.env.OFFERLAYER_DEMO ??= "1";
   const env = loadEnv();
   const handle = openDatabase(env);
   const keys = seedDatabase(handle);

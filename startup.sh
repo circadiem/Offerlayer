@@ -2,6 +2,10 @@
 set -eu
 cd /workspace
 
+# Local / sandbox preview is a demo host. Production entrypoints (Vercel,
+# apps/api) do not set this — they fail closed unless operator secrets exist.
+export OFFERLAYER_DEMO=1
+
 # :8081 is QA-only — a revive must never inherit a stale built-output preview.
 node scripts/preview.mjs stop >/dev/null 2>&1 || true
 

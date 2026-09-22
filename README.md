@@ -57,6 +57,14 @@ OFFERLAYER_URL=http://127.0.0.1:8787 OFFERLAYER_SELLER_KEY=agt_sell_... pnpm mcp
 
 ### Seed keys (also printed by `pnpm seed`)
 
+> **Demo mode only.** These keys are public and are accepted only by hosts
+> running with `OFFERLAYER_DEMO=1` (local demos, `pnpm demo*`, the test
+> suite). A production host **refuses to boot** with them — it requires
+> operator-generated secrets (`TOKEN_SECRET`, `INTERNAL_API_KEY`, `DEMO_KEY`,
+> `DEMO_AGENT_KEY`, `MUSE_AGENT_KEY`, `SELLER_AGENT_KEY`; generate with
+> `openssl rand -hex 32`). Never paste a production key into a doc, chat, or
+> repo.
+
 - Shopper demo: `agt_live_demo_v0_offerlayer_seed` (`agt_demo`) — Muse vault `OFFERLAYER_AGENT_KEY`
 - Muse shopper: `agt_live_muse_v0_offerlayer_seed` (`agt_muse`)
 - Seller demo: `agt_sell_demo_v0_offerlayer_seed` (`agt_seller`) — Muse vault `OFFERLAYER_SELLER_KEY`

@@ -23,7 +23,8 @@ Put each in its **own** Muse vault / thread / connector:
 | `OFFERLAYER_SELLER_KEY` | `agt_sell_…` | Connect shops, mandates, publish offers, read performance |
 | `OFFERLAYER_AGENT_KEY` | `agt_live_…` | Search, disclose, attach checkout, read conversion |
 
-Seed keys on the public host:
+Seed keys for a **demo-mode** host (`OFFERLAYER_DEMO=1`) only. A production
+host refuses to boot with these — it requires operator-generated secrets.
 
 ```
 OFFERLAYER_SELLER_KEY=agt_sell_demo_v0_offerlayer_seed
