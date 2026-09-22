@@ -1,0 +1,18 @@
+{
+  "name": "@offerlayer/shopify",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx server.ts",
+    "start": "tsx server.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.4",
+    "@offerlayer/db": "workspace:*",
+    "@offerlayer/schema": "workspace:*",
+    "hono": "^4.9.8"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.5"
+  }
+}

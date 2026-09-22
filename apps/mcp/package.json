@@ -1,0 +1,22 @@
+{
+  "name": "@offerlayer/mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "offerlayer-mcp": "./src/stdio.ts"
+  },
+  "scripts": {
+    "start": "tsx src/stdio.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.18.2",
+    "@offerlayer/schema": "workspace:*",
+    "zod": "^4.4.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.5"
+  }
+}

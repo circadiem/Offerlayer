@@ -1,0 +1,386 @@
+openapi: 3.1.0
+info:
+  title: Offerlayer API
+  version: 0.3.0
+  description: >
+    Public protocol for merchant-published purchase offers that agents can
+    attach at checkout. Muse is a consumer of this API, not a special case.
+    Seller agents (agt_sell_...) list shops and publish offers. Shopper agents
+    (agt_live_...) attach tokens at checkout. Keys are single-role.
+servers:
+  - url: http://localhost:8787
+    description: Local v0
+tags:
+  - name: discovery
+  - name: checkout
+  - name: conversions
+  - name: seller
+  - name: demo
+paths:
+  /health:
+    get:
+      tags: [discovery]
+      summary: Liveness
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  version: { type: string }
+  /.well-known/agent-offers.json:
+    get:
+      tags: [discovery]
+      parameters:
+        - in: query
+          name: shop
+          schema: { type: string }
+      responses:
+        "200":
+          description: Offer list for a shop
+  /v1/offers:
+    get:
+      tags: [discovery]
+      parameters:
+        - in: query
+          name: q
+          schema: { type: string }
+        - in: query
+          name: ship_to
+          schema: { type: string, minLength: 2, maxLength: 2 }
+        - in: query
+          name: max_price
+          schema: { type: string }
+        - in: query
+          name: shop
+          schema: { type: string }
+        - in: query
+          name: product_id
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 20, maximum: 50 }
+      responses:
+        "200":
+          description: Matching live offers
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [offers]
+                properties:
+                  offers:
+                    type: array
+                    items: { $ref: "#/components/schemas/Offer" }
+  /v1/offers/{id}:
+    get:
+      tags: [discovery]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: One offer
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Offer" }
+        "404":
+          description: Not found
+  /v1/checkouts:
+    post:
+      tags: [checkout]
+      security: [{ AgentBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [offer_id]
+              properties:
+                offer_id: { type: string }
+                principal_ref: { type: string }
+                return_url: { type: string }
+      responses:
+        "201":
+          description: Tracked checkout created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TrackedCheckout" }
+        "401":
+          description: Missing agent key
+        "409":
+          description: Cap exceeded
+  /v1/refer:
+    post:
+      tags: [checkout]
+      security: [{ AgentBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [offer_id]
+              properties:
+                offer_id: { type: string }
+                to_agent_id: { type: string }
+      responses:
+        "201":
+          description: One-hop referral token
+  /v1/conversions/{token}:
+    get:
+      tags: [conversions]
+      security: [{ AgentBearer: [] }]
+      parameters:
+        - in: path
+          name: token
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Conversion state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Conversion" }
+  /v1/simulate/purchase:
+    post:
+      tags: [demo]
+      security: [{ AgentBearer: [] }, { DemoKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, order_total, currency]
+              properties:
+                token: { type: string }
+                order_total: { type: string }
+                currency: { type: string }
+                email_hash: { type: string }
+      responses:
+        "201":
+          description: Simulated paid order
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Conversion" }
+  /v1/simulate/clear:
+    post:
+      tags: [demo]
+      security: [{ DemoKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        "200":
+          description: Hold waived for demo; payouts stubbed
+  /v1/webhooks/shopify:
+    post:
+      tags: [conversions]
+      description: Shopify HMAC-verified. orders/paid, orders/cancelled, refunds/create.
+      responses:
+        "200":
+          description: Accepted
+  /v1/seller/links:
+    post:
+      tags: [seller]
+      security: [{ SellerBearer: [] }]
+      summary: Create a Shopify install link. The human must open install_url.
+      responses:
+        "201":
+          description: Pending link
+  /v1/seller/links/{id}:
+    get:
+      tags: [seller]
+      security: [{ SellerBearer: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Link status
+  /v1/seller/links/{id}/complete:
+    post:
+      tags: [seller]
+      security: [{ SellerBearer: [] }, { DemoKey: [] }, { InternalKey: [] }]
+      responses:
+        "200":
+          description: Shop granted to the seller who created the link
+  /v1/seller/shops:
+    get:
+      tags: [seller]
+      security: [{ SellerBearer: [] }]
+      responses:
+        "200":
+          description: Shops this seller may manage
+  /v1/seller/offers:
+    get:
+      tags: [seller]
+      security: [{ SellerBearer: [] }]
+      responses:
+        "200":
+          description: Offers for granted shops
+    post:
+      tags: [seller]
+      security: [{ SellerBearer: [] }]
+      responses:
+        "201":
+          description: Offer created. Always includes disclosure.
+  /v1/seller/offers/{id}:
+    patch:
+      tags: [seller]
+      security: [{ SellerBearer: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Updated offer
+  /v1/seller/offers/{id}/pause:
+    post:
+      tags: [seller]
+      security: [{ SellerBearer: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Paused
+  /v1/seller/offers/{id}/resume:
+    post:
+      tags: [seller]
+      security: [{ SellerBearer: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Live if disclosure still valid
+  /v1/seller/offers/{id}/performance:
+    get:
+      tags: [seller]
+      security: [{ SellerBearer: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Attributed orders and hold buckets
+  /v1/simulate/connect_shop:
+    post:
+      tags: [demo]
+      security: [{ SellerBearer: [] }, { DemoKey: [] }]
+      summary: Demo shortcut — create + complete a shop link without a browser
+      responses:
+        "201":
+          description: Shop connected
+components:
+  securitySchemes:
+    AgentBearer:
+      type: http
+      scheme: bearer
+    SellerBearer:
+      type: http
+      scheme: bearer
+      description: Seller agent key (agt_sell_...)
+    DemoKey:
+      type: apiKey
+      in: header
+      name: x-demo-key
+    InternalKey:
+      type: apiKey
+      in: header
+      name: x-internal-key
+  schemas:
+    Offer:
+      $ref: "./offer.schema.json"
+    TrackedCheckout:
+      type: object
+      required: [token, expires_at, checkout_url, disclosure, reward]
+      properties:
+        token: { type: string }
+        offer_id: { type: string }
+        expires_at: { type: string, format: date-time }
+        checkout_url: { type: string, description: "Back-compat alias of checkout.permalink" }
+        disclosure: { type: string }
+        reward: { type: object }
+        finder_fee: { type: object }
+        checkout:
+          type: object
+          required: [permalink, agentic]
+          properties:
+            permalink: { type: string }
+            agentic:
+              type: object
+              required: [shop_domain, currency, attributes, note, utm]
+              properties:
+                shop_domain: { type: string }
+                currency: { type: string }
+                line_items:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      quantity: { type: integer }
+                      item:
+                        type: object
+                        properties:
+                          id: { type: string }
+                attributes:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      key: { type: string }
+                      value: { type: string }
+                note: { type: string }
+                warning: { type: string, enum: [NO_VARIANT_GID] }
+                utm:
+                  type: object
+                  properties:
+                    utm_source: { type: string }
+                    utm_medium: { type: string }
+                    utm_campaign: { type: string }
+                    utm_content: { type: string }
+    Conversion:
+      type: object
+      required: [token, status]
+      properties:
+        token: { type: string }
+        status:
+          enum: [issued, pending_hold, cleared, clawed_back, invalid, expired]
+        order_total: { type: string }
+        currency: { type: string }
+        reward_amount: { type: string }
+        finder_fee_amount: { type: string }
+        hold_until: { type: string, format: date-time }
+        payouts:
+          type: array
+          items:
+            type: object
+            properties:
+              party: { enum: [buyer, agent] }
+              amount: { type: string }
+              status: { type: string }

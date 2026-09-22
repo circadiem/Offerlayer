@@ -1,0 +1,26 @@
+{
+  "name": "@offerlayer/api",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./app": "./src/app.ts"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.4",
+    "@offerlayer/db": "workspace:*",
+    "@offerlayer/schema": "workspace:*",
+    "@offerlayer/token": "workspace:*",
+    "drizzle-orm": "^0.44.5",
+    "hono": "^4.9.8",
+    "nanoid": "^5.1.5",
+    "zod": "^4.4.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.5"
+  }
+}
