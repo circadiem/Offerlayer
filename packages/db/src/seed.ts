@@ -13,7 +13,7 @@ export const SEED_AGENT_MUSE = "agt_muse";
 export const SEED_AGENT_SELLER = "agt_seller";
 
 export const SEED_DISCLOSURE =
-  "If you buy this Organic Turkish Towel Set through this tracked checkout, the merchant funds a $4.00 buyer reward after a 14-day refund hold. The presenting agent may earn a 2% finder fee on the paid total. Nothing is paid on click or recommendation alone; refunds reverse both amounts.";
+  "If you buy this Organic Turkish Towel Set through an AI agent, the store funds $4.00 after 14 days, as long as you don't return it. Nothing is paid just for showing it.";
 
 export const SEED_OFFER = {
   id: SEED_OFFER_ID,
@@ -131,6 +131,18 @@ export function seedDatabase(handle = openDatabase()): {
       },
     })
     .run();
+
+  for (const row of db.select().from(offers).all()) {
+    if (!row.disclosure?.includes("finder fee")) continue;
+    const disclosure =
+      row.id === SEED_OFFER_ID
+        ? SEED_DISCLOSURE
+        : row.disclosure.replace(/ ?Optional agent finder fee: [^.]+\./, "").replace(
+            / ?The presenting agent may earn a 2% finder fee on the paid total\./,
+            "",
+          );
+    db.update(offers).set({ disclosure, updatedAt: now }).where(eq(offers.id, row.id)).run();
+  }
 
   const upsertAgent = (id: string, name: string, apiKeyHash: string, role: "shopper" | "seller") => {
     const existing = db.select().from(agents).where(eq(agents.id, id)).get();

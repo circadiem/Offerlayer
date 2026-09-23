@@ -228,11 +228,11 @@ function defaultDisclosure(
   finderFee?: { type: string; amount: string } | null,
 ): string {
   const rewardText = reward.type === "percent" ? `${reward.amount}%` : `$${normalizeMoney(reward.amount)}`;
-  const feeText = finderFee
-    ? finderFee.type === "percent"
-      ? `${finderFee.amount}%`
-      : `$${normalizeMoney(finderFee.amount)}`
-    : "none";
+  if (!finderFee?.amount || finderFee.amount === "0") {
+    return `${shopName} funds a ${rewardText} discount on this order if you buy through an AI agent. Nothing is paid just for showing it.`;
+  }
+  const feeText =
+    finderFee.type === "percent" ? `${finderFee.amount}%` : `$${normalizeMoney(finderFee.amount)}`;
   return `${shopName} funds a ${rewardText} credit on this order if you buy through this Offerlayer offer. Optional agent finder fee: ${feeText}.`;
 }
 

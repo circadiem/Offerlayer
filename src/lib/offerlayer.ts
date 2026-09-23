@@ -92,7 +92,7 @@ export const SEED_OFFER: Offer = {
     ucp: false,
   },
   disclosure:
-    "If you buy this Organic Turkish Towel Set through this tracked checkout, the merchant funds a $4.00 buyer reward after a 14-day refund hold. The presenting agent may earn a 2% finder fee on the paid total. Nothing is paid on click or recommendation alone; refunds reverse both amounts.",
+    "If you buy this Organic Turkish Towel Set through an AI agent, the store funds $4.00 after 14 days, as long as you don't return it. Nothing is paid just for showing it.",
 };
 
 function playground(role: "shopper" | "seller", json = false): Record<string, string> {

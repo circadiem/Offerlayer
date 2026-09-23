@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { ArrowRight, Check, Layers, LoaderCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { SellerConsole } from "@/components/seller-console";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -214,7 +215,7 @@ function Home() {
                       </CardDescription>
                     </div>
                     <div className="text-right">
-                      <p className="text-xs uppercase tracking-wide text-muted-foreground">Buyer reward</p>
+                      <p className="text-xs uppercase tracking-wide text-muted-foreground">Discount</p>
                       <p className="tabular font-display text-2xl">
                         {offer.reward.type === "flat" ? `$${offer.reward.amount}` : `${offer.reward.amount}%`}
                       </p>
@@ -300,9 +301,11 @@ function Home() {
                 <p className="mt-2 text-sm text-muted-foreground">Hold until {conversion.hold_until}</p>
               ) : null}
               <div className="mt-4 space-y-2">
-                {(conversion.payouts ?? []).map((p) => (
+                {(conversion.payouts ?? [])
+                  .filter((p) => p.party === "buyer")
+                  .map((p) => (
                   <div key={p.party} className="flex items-center justify-between rounded-sm bg-background px-3 py-2">
-                    <span className="text-sm">{p.party}</span>
+                    <span className="text-sm">Discount</span>
                     <span className="tabular font-mono text-sm">
                       ${p.amount} · {p.status}
                     </span>
@@ -310,7 +313,7 @@ function Home() {
                 ))}
                 {conversion.status === "cleared" ? (
                   <p className="flex items-center gap-2 text-sm text-ok">
-                    <Check className="size-4" /> Buyer $4.00 and agent $0.64 stubbed
+                    <Check className="size-4" /> The $4.00 is marked ready.
                   </p>
                 ) : null}
               </div>
@@ -318,6 +321,7 @@ function Home() {
           ) : null}
         </aside>
       </div>
+      <SellerConsole />
     </main>
   );
 }
