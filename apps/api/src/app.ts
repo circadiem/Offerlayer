@@ -224,7 +224,7 @@ export function createApp(handle: DbHandle) {
   app.post("/v1/checkouts", async (c) => {
     const agent = await requireShopper(c);
     const body = checkoutRequestSchema.parse(await c.req.json());
-    const result = issueCheckout(handle, {
+    const result = await issueCheckout(handle, {
       offerId: body.offer_id,
       agentId: agent.id,
       principalRef: body.principal_ref,
@@ -241,7 +241,7 @@ export function createApp(handle: DbHandle) {
       if (!dest) throw jsonError("AGENT_NOT_FOUND", "to_agent_id not found", 404);
     }
     const presenting = body.to_agent_id ?? agent.id;
-    const result = issueCheckout(handle, {
+    const result = await issueCheckout(handle, {
       offerId: body.offer_id,
       agentId: presenting,
       referrerAgentId: agent.id,

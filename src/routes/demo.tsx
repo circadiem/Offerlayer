@@ -313,7 +313,7 @@ function Home() {
                 ))}
                 {conversion.status === "cleared" ? (
                   <p className="flex items-center gap-2 text-sm text-ok">
-                    <Check className="size-4" /> The $4.00 is marked ready.
+                    <Check className="size-4" /> The 10% is on this checkout.
                   </p>
                 ) : null}
               </div>

@@ -60,6 +60,19 @@ describe("checkout attach v0.3", () => {
     expect(url).toContain(`utm_campaign=${seed.id}`);
     expect(url).toContain(`utm_content=${TOKEN}`);
     expect(url).toContain("payment=shop_pay");
+    expect(url).not.toContain("discount=");
+  });
+
+  it("a one-time code is on that checkout only", () => {
+    const url = buildPermalink({
+      template: seed.checkout.tracked_url_template,
+      token: TOKEN,
+      offerId: seed.id,
+      shopDomain: seed.merchant.shop_domain,
+      discountCode: "OLABC123",
+    });
+    expect(url).toContain("discount=OLABC123");
+    expect(url).not.toContain("discount=OLABC123&discount=");
   });
 
   it("seed handoff omits line_items and warns", () => {

@@ -78,7 +78,7 @@ export const SEED_OFFER: Offer = {
     currency: "USD",
     list_price: "32.00",
   },
-  reward: { type: "flat", amount: "4.00", currency: "USD", recipient: "buyer" },
+  reward: { type: "percent", amount: "10", currency: "USD", recipient: "buyer" },
   finder_fee: { type: "percent", amount: "2", currency: "USD", recipient: "agent" },
   constraints: {
     clawback_days: 14,
@@ -92,7 +92,7 @@ export const SEED_OFFER: Offer = {
     ucp: false,
   },
   disclosure:
-    "If you buy this Organic Turkish Towel Set through an AI agent, the store funds $4.00 after 14 days, as long as you don't return it. Nothing is paid just for showing it.",
+    "10% off this checkout of the Organic Turkish Towel Set. The code works once, on this cart only, and cannot be shared.",
 };
 
 function playground(role: "shopper" | "seller", json = false): Record<string, string> {
@@ -354,7 +354,7 @@ export async function createSellerOffer(input: {
         currency: "USD",
         list_price: input.list_price,
       },
-      reward: { type: "flat", amount: input.reward_amount, currency: "USD" },
+      reward: { type: "percent", amount: input.reward_amount, currency: "USD" },
       finder_fee: input.finder_fee_amount
         ? { type: "percent", amount: input.finder_fee_amount, currency: "USD" }
         : undefined,

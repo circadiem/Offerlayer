@@ -63,6 +63,7 @@ export function buildPermalink(args: {
   token: string;
   offerId: string;
   shopDomain: string;
+  discountCode?: string;
 }): string {
   const stamped = stampToken(args.template, args.token);
   const extra: Record<string, string> = {
@@ -71,17 +72,23 @@ export function buildPermalink(args: {
     utm_campaign: args.offerId,
     utm_content: args.token,
   };
+  if (args.discountCode) extra.discount = args.discountCode;
   if (shopSupportsShopPay(args.shopDomain)) extra.payment = "shop_pay";
   return appendQuery(stamped, extra);
 }
 
-export function buildCheckoutHandoff(args: { offer: Offer; token: string }): CheckoutHandoff {
+export function buildCheckoutHandoff(args: {
+  offer: Offer;
+  token: string;
+  discountCode?: string;
+}): CheckoutHandoff {
   const shop = args.offer.merchant.shop_domain;
   const permalink = buildPermalink({
     template: args.offer.checkout.tracked_url_template,
     token: args.token,
     offerId: args.offer.id,
     shopDomain: shop,
+    discountCode: args.discountCode,
   });
   const variantGid = resolveVariantGid(args.offer);
   const currency = args.offer.selector.currency ?? args.offer.reward.currency;

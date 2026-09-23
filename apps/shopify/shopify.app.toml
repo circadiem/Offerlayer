@@ -1,17 +1,17 @@
 name = "offerlayer"
 client_id = ""
-application_url = "https://offerlayer.grok.me"
+application_url = "https://www.offerlayer.io"
 embedded = true
 
 [access_scopes]
-scopes = "read_products,read_orders,write_orders,read_customers"
+scopes = "read_products,read_orders,write_orders,read_customers,write_discounts"
 
 [auth]
-redirect_urls = [ "https://offerlayer.grok.me/auth/callback" ]
+redirect_urls = [ "https://www.offerlayer.io/auth/callback" ]
 
 [webhooks]
 api_version = "2025-01"
 
   [[webhooks.subscriptions]]
   topics = [ "orders/paid", "orders/cancelled", "refunds/create" ]
-  uri = "https://offerlayer.grok.me/v1/webhooks/shopify"
+  uri = "https://www.offerlayer.io/v1/webhooks/shopify"

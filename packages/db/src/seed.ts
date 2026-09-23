@@ -13,7 +13,7 @@ export const SEED_AGENT_MUSE = "agt_muse";
 export const SEED_AGENT_SELLER = "agt_seller";
 
 export const SEED_DISCLOSURE =
-  "If you buy this Organic Turkish Towel Set through an AI agent, the store funds $4.00 after 14 days, as long as you don't return it. Nothing is paid just for showing it.";
+  "10% off this checkout of the Organic Turkish Towel Set. The code works once, on this cart only, and cannot be shared.";
 
 export const SEED_OFFER = {
   id: SEED_OFFER_ID,
@@ -32,8 +32,8 @@ export const SEED_OFFER = {
     list_price: "32.00",
   },
   reward: {
-    type: "flat" as const,
-    amount: "4.00",
+    type: "percent" as const,
+    amount: "10",
     currency: "USD",
     recipient: "buyer" as const,
   },
@@ -123,6 +123,7 @@ export function seedDatabase(handle = openDatabase()): {
         selectorTitle: SEED_OFFER.selector.title,
         listPrice: SEED_OFFER.selector.list_price,
         disclosure: SEED_OFFER.disclosure,
+        rewardType: SEED_OFFER.reward.type,
         rewardAmount: SEED_OFFER.reward.amount,
         finderFeeAmount: SEED_OFFER.finder_fee.amount,
         maxPerPrincipalPerDay: SEED_OFFER.constraints.max_per_principal_per_day,

@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { decryptSecret, encryptSecret } from "@offerlayer/db";
 
 export const SHOPIFY_API_VERSION = "2025-01";
@@ -249,4 +249,76 @@ export function parseCatalogJson(raw: string | null | undefined, shopDomain: str
   } catch {
     return [];
   }
+}
+
+/** One code per checkout. Not a word a shopper can pass around. */
+export function oneTimeDiscountCode(): string {
+  return `OL${randomBytes(6).toString("hex").toUpperCase()}`;
+}
+
+const DISCOUNT_CREATE = `mutation discountCodeBasicCreate($basicCodeDiscount: DiscountCodeBasicInput!) {
+  discountCodeBasicCreate(basicCodeDiscount: $basicCodeDiscount) {
+    codeDiscountNode { id }
+    userErrors { field message }
+  }
+}`;
+
+export async function createCheckoutDiscount(args: {
+  shop: string;
+  accessToken: string;
+  code: string;
+  percent: string;
+  productGid?: string | null;
+  endsAt: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const shop = normalizeShopDomain(args.shop);
+  const percent = Number(args.percent);
+  if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
+    return { ok: false, error: "invalid percent" };
+  }
+  const items = args.productGid
+    ? { products: { productsToAdd: [args.productGid] } }
+    : { all: true };
+  const res = await shopifyAdmin.fetch(`https://${shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json",
+      "x-shopify-access-token": args.accessToken,
+    },
+    body: JSON.stringify({
+      query: DISCOUNT_CREATE,
+      variables: {
+        basicCodeDiscount: {
+          title: `Offerlayer ${args.code}`,
+          code: args.code,
+          startsAt: new Date().toISOString(),
+          endsAt: args.endsAt,
+          usageLimit: 1,
+          appliesOncePerCustomer: true,
+          customerSelection: { all: true },
+          customerGets: {
+            value: { percentage: percent / 100 },
+            items,
+          },
+        },
+      },
+    }),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    data?: {
+      discountCodeBasicCreate?: {
+        codeDiscountNode?: { id?: string } | null;
+        userErrors?: { message?: string }[];
+      };
+    };
+    errors?: { message?: string }[];
+  };
+  const created = body.data?.discountCodeBasicCreate;
+  const message =
+    created?.userErrors?.find((e) => e.message)?.message ?? body.errors?.find((e) => e.message)?.message;
+  if (!res.ok || !created?.codeDiscountNode?.id || message) {
+    return { ok: false, error: message ?? `Shopify discount failed (${res.status})` };
+  }
+  return { ok: true };
 }

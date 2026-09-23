@@ -260,7 +260,7 @@ export function SellerConsole() {
       </Card>
 
       <Card className="mt-4 space-y-4">
-        <CardTitle>Publish the $4 discount</CardTitle>
+        <CardTitle>Publish the 10% discount</CardTitle>
         <CardDescription>
           The cart link carries the discount so the order can be matched. Until a real store is connected,
           payment stays simulated.
@@ -274,7 +274,7 @@ export function SellerConsole() {
                 shop_domain: shop,
                 title: "Organic Turkish Towel Set",
                 list_price: "32.00",
-                reward_amount: "4.00",
+                reward_amount: "10",
                 finder_fee_amount: "",
                 product_id: productId,
                 variant_id: products.find((p) => p.id === productId)?.variant_id,
@@ -284,7 +284,7 @@ export function SellerConsole() {
             })
           }
         >
-          Publish the $4 discount
+          Publish the 10% discount
         </Button>
         <Button
           variant="outline"

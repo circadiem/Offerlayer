@@ -19,6 +19,7 @@ import {
 import { issueToken, tokenExpiresAt, verifyToken, TokenError } from "@offerlayer/token";
 import { buildCheckoutHandoff } from "./checkout-attach.ts";
 import { jsonError } from "./errors.ts";
+import { createCheckoutDiscount, decryptAccessToken, oneTimeDiscountCode } from "./shopify-admin.ts";
 
 export function trackedUrl(template: string, token: string): string {
   if (template.includes("{token}")) return template.replaceAll("{token}", token);
@@ -45,7 +46,7 @@ export function loadOffer(
   return { offer: rowToOffer(row, merchant), row, merchant };
 }
 
-export function issueCheckout(
+export async function issueCheckout(
   handle: DbHandle,
   args: {
     offerId: string;
@@ -57,7 +58,7 @@ export function issueCheckout(
     exp?: number;
   },
 ) {
-  const { offer, row } = loadOffer(handle, args.offerId);
+  const { offer, row, merchant } = loadOffer(handle, args.offerId);
   if (offer.status !== "live") {
     throw jsonError("OFFER_NOT_LIVE", "Offer is not live", 409);
   }
@@ -97,7 +98,27 @@ export function issueCheckout(
     })
     .run();
 
-  const handoff = buildCheckoutHandoff({ offer, token: issued.token });
+  let discountCode: string | undefined;
+  if (merchant.accessTokenEnc && offer.reward.type === "percent") {
+    const code = oneTimeDiscountCode();
+    const productGid = (offer.selector.ids ?? []).find((id) => /\/Product\//i.test(id)) ?? null;
+    try {
+      const accessToken = decryptAccessToken(merchant.accessTokenEnc, handle.env.tokenSecret);
+      const created = await createCheckoutDiscount({
+        shop: merchant.shopDomain,
+        accessToken,
+        code,
+        percent: offer.reward.amount,
+        productGid,
+        endsAt: new Date(issued.payload.exp * 1000).toISOString(),
+      });
+      if (created.ok) discountCode = code;
+    } catch {
+      discountCode = undefined;
+    }
+  }
+
+  const handoff = buildCheckoutHandoff({ offer, token: issued.token, discountCode });
   return {
     token: issued.token,
     offer_id: offer.id,

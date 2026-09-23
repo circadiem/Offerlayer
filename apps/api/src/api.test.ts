@@ -239,7 +239,8 @@ describe("offerlayer v0", () => {
     expect(second.body.error.code).toBe("CAP_EXCEEDED");
   });
 
-  it("clear hold stubs buyer $4.00 and agent $0.64", async () => {
+  it("clear hold stubs buyer 10% and agent $0.64", async () => {
+    expect(computePayout({ type: "percent", amount: "10", orderTotal: "32.00" })).toBe("3.20");
     expect(computePayout({ type: "percent", amount: "2", orderTotal: "32.00" })).toBe("0.64");
     const checkout = await json("/v1/checkouts", {
       method: "POST",
@@ -274,7 +275,7 @@ describe("offerlayer v0", () => {
     expect(body.status).toBe("cleared");
     const buyer = body.payouts.find((p: { party: string }) => p.party === "buyer");
     const agent = body.payouts.find((p: { party: string }) => p.party === "agent");
-    expect(buyer.amount).toBe("4.00");
+    expect(buyer.amount).toBe("3.20");
     expect(agent.amount).toBe("0.64");
     expect(buyer.status).toBe("stubbed");
   });
