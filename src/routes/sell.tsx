@@ -42,6 +42,11 @@ function Sell() {
   const [me, setMe] = useState<SellerMe | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [origin, setOrigin] = useState("https://offerlayer.vercel.app");
+
+  useEffect(() => {
+    setOrigin(window.location.origin);
+  }, []);
 
   useEffect(() => {
     getSellerMe()
@@ -75,24 +80,23 @@ function Sell() {
       <Card className="mt-8 space-y-4">
         <CardTitle>Partners URLs</CardTitle>
         <CardDescription>
-          App URL, redirect, and webhook must be the public host — never a local loopback. Human OAuth is
-          required; the agent cannot skip it.
+          These URLs are this site, not a different host. Shopify’s own redirect stays off until a Partners
+          app is connected. Simulate OAuth is the path that works here. “Demo grant only” skips OAuth on
+          purpose — it is a button, not a locked control.
         </CardDescription>
         <dl className="space-y-2 font-mono text-xs text-muted-foreground">
           <div>
             <dt className="text-[0.7rem] uppercase tracking-wide">App URL</dt>
-            <dd className="break-all text-foreground">{me?.app_url ?? "https://offerlayer.grok.me"}</dd>
+            <dd className="break-all text-foreground">{me?.app_url ?? origin}</dd>
           </div>
           <div>
             <dt className="text-[0.7rem] uppercase tracking-wide">Redirect</dt>
-            <dd className="break-all text-foreground">
-              {me?.redirect_uri ?? "https://offerlayer.grok.me/auth/callback"}
-            </dd>
+            <dd className="break-all text-foreground">{me?.redirect_uri ?? `${origin}/auth/callback`}</dd>
           </div>
           <div>
             <dt className="text-[0.7rem] uppercase tracking-wide">Webhook</dt>
             <dd className="break-all text-foreground">
-              {me?.webhook_uri ?? "https://offerlayer.grok.me/v1/webhooks/shopify"}
+              {me?.webhook_uri ?? `${origin}/v1/webhooks/shopify`}
             </dd>
           </div>
           <div>

@@ -89,6 +89,27 @@ describe("offerlayer v0", () => {
     expect(body.error.code).toBe("UNAUTHORIZED");
   });
 
+  it("playground header checks out without putting a key on the client", async () => {
+    const { res, body } = await json("/v1/checkouts", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-offerlayer-playground": "shopper",
+      },
+      body: JSON.stringify({ offer_id: "off_towel_organic_set" }),
+    });
+    expect(res.status).toBe(201);
+    expect(body.token.startsWith("olt_")).toBe(true);
+    expect(JSON.stringify(body)).not.toContain(agentKey);
+
+    const me = await json("/v1/seller/me", {
+      headers: { "x-offerlayer-playground": "seller" },
+    });
+    expect(me.res.status).toBe(200);
+    expect(me.body.role).toBe("seller");
+    expect(JSON.stringify(me.body)).not.toContain(handle.env.sellerAgentKey);
+  });
+
   it("checkout with demo agent key returns olt_ token", async () => {
     const { res, body } = await json("/v1/checkouts", {
       method: "POST",

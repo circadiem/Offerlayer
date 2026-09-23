@@ -69,7 +69,8 @@ OFFERLAYER_URL=http://127.0.0.1:8787 OFFERLAYER_SELLER_KEY=agt_sell_... pnpm mcp
 - Muse shopper: `agt_live_muse_v0_offerlayer_seed` (`agt_muse`)
 - Seller demo: `agt_sell_demo_v0_offerlayer_seed` (`agt_seller`) — Muse vault `OFFERLAYER_SELLER_KEY`
 - Demo header: `x-demo-key: offerlayer_demo_v0`
-- Public origin: `https://offerlayer.grok.me`
+- Operator host: `https://offerlayer.vercel.app` (keys live in that host’s environment, not in this file)
+- Separate Grok publish: `https://offerlayer.grok.me` — not the same API
 
 API keys are stored as SHA-256 hashes. Tokens are HMAC-SHA256 (`issueToken` / `verifyToken`) prefixed `olt_`. A key has exactly one role. Ed25519 is the upgrade path.
 
@@ -80,12 +81,12 @@ Set these on the host. None of the URLs may stay on localhost:
 ```
 SHOPIFY_API_KEY=...
 SHOPIFY_API_SECRET=...
-APP_URL=https://offerlayer.grok.me
+APP_URL=https://offerlayer.vercel.app
 TOKEN_SECRET=...          # encrypts merchant access tokens
 DATABASE_URL=postgres://...
 ```
 
-Partners dashboard: App URL `https://offerlayer.grok.me`, redirect `https://offerlayer.grok.me/auth/callback`, webhook `https://offerlayer.grok.me/v1/webhooks/shopify` (`orders/paid`, `orders/cancelled`, `refunds/create`).
+Partners dashboard: App URL `https://offerlayer.vercel.app`, redirect `https://offerlayer.vercel.app/auth/callback`, webhook `https://offerlayer.vercel.app/v1/webhooks/shopify` (`orders/paid`, `orders/cancelled`, `refunds/create`). Until `SHOPIFY_API_KEY` is set, `/auth/login` does not redirect to Shopify. Use `POST /v1/simulate/shopify_oauth`.
 
 When those keys are set, `GET /auth/login?shop=…&seller_link=lnk_…` 302s to Shopify. The callback verifies HMAC, stores the access token encrypted, completes the seller link, and registers webhooks. Publish a **real product gid** from `GET /v1/seller/shops/{id}/products`, not `Product/1001`. Cart URL is `…/cart/{variant}:1?attributes[agent_ref]={token}`. Until `orders/paid` fires, conversion stays simulated.
 
@@ -98,16 +99,17 @@ See `docs/SHOPIFY.md`.
 ```
 You are connecting to Offerlayer, a purchase-offer protocol.
 
-Base URL: https://offerlayer.grok.me
+Base URL: https://offerlayer.vercel.app
 
-Two credentials — never mix them in one flow. Put each in its own vault/thread:
+Two credentials — never mix them in one flow. Put each in its own vault/thread.
+Do not copy keys off the website. The operator sets them.
 
-  OFFERLAYER_SELLER_KEY=agt_sell_demo_v0_offerlayer_seed
-  OFFERLAYER_AGENT_KEY=agt_live_demo_v0_offerlayer_seed
+  OFFERLAYER_SELLER_KEY=agt_sell_…
+  OFFERLAYER_AGENT_KEY=agt_live_…
 
 Seller script (this thread, seller key only):
   1. POST /v1/seller/links {"shop_domain":"demo-towels.myshopify.com"}
-     Show install_url + disclosure. URLs are on offerlayer.grok.me.
+     Show install_url + disclosure. URLs are on the base URL above.
   2. Human opens install_url (or says yes in chat). Then:
      POST /v1/seller/links/{pending_link_id}/complete
        Authorization: Bearer $OFFERLAYER_SELLER_KEY

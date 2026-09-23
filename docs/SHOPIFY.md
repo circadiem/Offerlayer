@@ -8,9 +8,9 @@ None of these may stay on localhost:
 
 | Setting | Value |
 |---|---|
-| App URL | `https://offerlayer.grok.me` |
-| Allowed redirection URL | `https://offerlayer.grok.me/auth/callback` |
-| Webhook URI | `https://offerlayer.grok.me/v1/webhooks/shopify` |
+| App URL | `https://offerlayer.vercel.app` |
+| Allowed redirection URL | `https://offerlayer.vercel.app/auth/callback` |
+| Webhook URI | `https://offerlayer.vercel.app/v1/webhooks/shopify` |
 | Topics | `orders/paid`, `orders/cancelled`, `refunds/create` |
 | API version | `2025-01` |
 
@@ -21,7 +21,7 @@ None of these may stay on localhost:
 ```
 SHOPIFY_API_KEY=...
 SHOPIFY_API_SECRET=...          # also the webhook signing secret
-APP_URL=https://offerlayer.grok.me
+APP_URL=https://offerlayer.vercel.app
 TOKEN_SECRET=...                # ≥16 chars; encrypts access tokens
 DATABASE_URL=postgres://...     # durable (Neon). Do not use a disposable sqlite file on the host.
 ```

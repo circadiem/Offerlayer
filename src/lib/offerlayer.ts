@@ -95,8 +95,11 @@ export const SEED_OFFER: Offer = {
     "If you buy this Organic Turkish Towel Set through this tracked checkout, the merchant funds a $4.00 buyer reward after a 14-day refund hold. The presenting agent may earn a 2% finder fee on the paid total. Nothing is paid on click or recommendation alone; refunds reverse both amounts.",
 };
 
-const AGENT_KEY = "agt_live_demo_v0_offerlayer_seed";
-const DEMO_KEY = "offerlayer_demo_v0";
+function playground(role: "shopper" | "seller", json = false): Record<string, string> {
+  const headers: Record<string, string> = { "x-offerlayer-playground": role };
+  if (json) headers["content-type"] = "application/json";
+  return headers;
+}
 
 async function parse<T>(res: Response): Promise<T> {
   const body = (await res.json()) as T & { error?: { code: string; message: string; card_text?: string } };
@@ -123,8 +126,7 @@ export async function createCheckout(offerId: string, principalRef?: string): Pr
   const res = await fetch("/v1/checkouts", {
     method: "POST",
     headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${AGENT_KEY}`,
+      ...playground("shopper", true),
     },
     body: JSON.stringify({ offer_id: offerId, principal_ref: principalRef }),
   });
@@ -135,8 +137,7 @@ export async function simulatePurchase(token: string, emailHash: string): Promis
   const res = await fetch("/v1/simulate/purchase", {
     method: "POST",
     headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${AGENT_KEY}`,
+      ...playground("shopper", true),
     },
     body: JSON.stringify({
       token,
@@ -153,7 +154,7 @@ export async function simulateClear(token: string): Promise<Conversion> {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-demo-key": DEMO_KEY,
+      ...playground("shopper"),
     },
     body: JSON.stringify({ token }),
   });
@@ -177,7 +178,7 @@ export async function publishOffer(input: {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-demo-key": DEMO_KEY,
+      ...playground("shopper"),
     },
     body: JSON.stringify({
       shop_domain: input.shop_domain,
@@ -221,9 +222,6 @@ export async function publishOffer(input: {
   });
   return parse(res);
 }
-
-export const DEMO_AGENT_KEY = AGENT_KEY;
-export const DEMO_SELLER_KEY = "agt_sell_demo_v0_offerlayer_seed";
 
 export type SellerLink = {
   pending_link_id: string;
@@ -275,8 +273,7 @@ export async function createSellerLink(shopDomain: string): Promise<SellerLink> 
   const res = await fetch("/v1/seller/links", {
     method: "POST",
     headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${DEMO_SELLER_KEY}`,
+      ...playground("seller", true),
     },
     body: JSON.stringify({ shop_domain: shopDomain }),
   });
@@ -287,9 +284,7 @@ export async function connectDemoShop(shopDomain: string): Promise<SellerLink> {
   const res = await fetch("/v1/simulate/connect_shop", {
     method: "POST",
     headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${DEMO_SELLER_KEY}`,
-      "x-demo-key": DEMO_KEY,
+      ...playground("seller", true),
     },
     body: JSON.stringify({ shop_domain: shopDomain }),
   });
@@ -298,7 +293,7 @@ export async function connectDemoShop(shopDomain: string): Promise<SellerLink> {
 
 export async function listSellerShops(): Promise<SellerShop[]> {
   const res = await fetch("/v1/seller/shops", {
-    headers: { authorization: `Bearer ${DEMO_SELLER_KEY}` },
+    headers: playground("seller"),
   });
   const body = await parse<{ shops: SellerShop[] }>(res);
   return body.shops;
@@ -306,7 +301,7 @@ export async function listSellerShops(): Promise<SellerShop[]> {
 
 export async function getSellerMe(): Promise<SellerMe> {
   const res = await fetch("/v1/seller/me", {
-    headers: { authorization: `Bearer ${DEMO_SELLER_KEY}` },
+    headers: playground("seller"),
   });
   return parse(res);
 }
@@ -317,9 +312,7 @@ export async function simulateShopifyOauth(shopDomain: string): Promise<
   const res = await fetch("/v1/simulate/shopify_oauth", {
     method: "POST",
     headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${DEMO_SELLER_KEY}`,
-      "x-demo-key": DEMO_KEY,
+      ...playground("seller", true),
     },
     body: JSON.stringify({ shop_domain: shopDomain }),
   });
@@ -328,7 +321,7 @@ export async function simulateShopifyOauth(shopDomain: string): Promise<
 
 export async function listShopProducts(merchantId: string): Promise<CatalogProduct[]> {
   const res = await fetch(`/v1/seller/shops/${encodeURIComponent(merchantId)}/products`, {
-    headers: { authorization: `Bearer ${DEMO_SELLER_KEY}` },
+    headers: playground("seller"),
   });
   const body = await parse<{ products: CatalogProduct[] }>(res);
   return body.products;
@@ -349,8 +342,7 @@ export async function createSellerOffer(input: {
   const res = await fetch("/v1/seller/offers", {
     method: "POST",
     headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${DEMO_SELLER_KEY}`,
+      ...playground("seller", true),
     },
     body: JSON.stringify({
       shop_domain: input.shop_domain,
@@ -378,7 +370,7 @@ export async function createSellerOffer(input: {
 
 export async function getOfferPerformance(id: string): Promise<OfferPerformance> {
   const res = await fetch(`/v1/seller/offers/${encodeURIComponent(id)}/performance`, {
-    headers: { authorization: `Bearer ${DEMO_SELLER_KEY}` },
+    headers: playground("seller"),
   });
   return parse(res);
 }
@@ -396,8 +388,7 @@ export async function proposeMandate(shopDomain: string, productId = "gid://shop
   const res = await fetch("/v1/seller/mandates", {
     method: "POST",
     headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${DEMO_SELLER_KEY}`,
+      ...playground("seller", true),
     },
     body: JSON.stringify({
       shop_domain: shopDomain,
@@ -419,8 +410,7 @@ export async function activateMandate(id: string): Promise<Mandate> {
   const res = await fetch(`/v1/seller/mandates/${encodeURIComponent(id)}/activate`, {
     method: "POST",
     headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${DEMO_SELLER_KEY}`,
+      ...playground("seller", true),
     },
     body: JSON.stringify({ human_confirmed: true }),
   });
@@ -431,8 +421,7 @@ export async function tryExceedOffer(shopDomain: string, productId = "gid://shop
   const res = await fetch("/v1/seller/offers", {
     method: "POST",
     headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${DEMO_SELLER_KEY}`,
+      ...playground("seller", true),
     },
     body: JSON.stringify({
       shop_domain: shopDomain,

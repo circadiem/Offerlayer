@@ -10,7 +10,9 @@ You bring the shopper context. We bring offer discovery, a signed `agent_ref` to
 
 ## Base URL
 
-Production: `https://offerlayer.grok.me`
+Production: `https://offerlayer.vercel.app`
+
+`https://offerlayer.grok.me` is a separate publish and is not this API.
 
 Auth is **Bearer only**. Do not HMAC-sign Offerlayer HTTP requests. Shopify HMAC is for Shopify webhooks and OAuth callbacks, not for Muse.
 
@@ -23,19 +25,18 @@ Put each in its **own** Muse vault / thread / connector:
 | `OFFERLAYER_SELLER_KEY` | `agt_sell_…` | Connect shops, mandates, publish offers, read performance |
 | `OFFERLAYER_AGENT_KEY` | `agt_live_…` | Search, disclose, attach checkout, read conversion |
 
-Seed keys for a **demo-mode** host (`OFFERLAYER_DEMO=1`) only. A production
-host refuses to boot with these — it requires operator-generated secrets.
+The operator generates these. They are not printed on the website. The old public seed strings do not work on `offerlayer.vercel.app`.
 
 ```
-OFFERLAYER_SELLER_KEY=agt_sell_demo_v0_offerlayer_seed
-OFFERLAYER_AGENT_KEY=agt_live_demo_v0_offerlayer_seed
+OFFERLAYER_SELLER_KEY=agt_sell_…
+OFFERLAYER_AGENT_KEY=agt_live_…
 ```
 
 Cross-role calls return `403 ROLE_MISMATCH`. A seller key cannot checkout. A shopper key cannot publish.
 
 ## Allowed hosts
 
-- `https://offerlayer.grok.me` only for the API key.
+- `https://offerlayer.vercel.app` for the API key on this deployment.
 - Merchant `checkout_url` hosts returned by the API (Shopify shop domains). Send the `olt_…` token there, never the agent key.
 
 ## Hard rules
@@ -69,7 +70,7 @@ Muse approval cards map like this:
 ### Connect a shop (human in the browser)
 
 1. `POST /v1/seller/links` `{"shop_domain":"YOUR-SHOP.myshopify.com"}`
-   Show `install_url` and `disclosure` verbatim. URLs are on `https://offerlayer.grok.me`.
+   Show `install_url` and `disclosure` verbatim. The host is the base URL above.
 2. The human opens `install_url` and approves Shopify OAuth. There is no agent-only install.
    - When Partners credentials are set, that URL **redirects to Shopify**. `GET /auth/callback` verifies HMAC, stores the access token, registers `orders/paid` / `orders/cancelled` / `refunds/create`, and `POST`s the seller link complete.
    - Demo without Partners: after the human says yes, `POST /v1/seller/links/{id}/complete` with the seller Bearer, or `POST /v1/simulate/connect_shop` / `POST /v1/simulate/shopify_oauth` (still needs the human + `x-demo-key`).

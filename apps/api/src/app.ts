@@ -46,6 +46,7 @@ function timingEqual(a: string, b: string): boolean {
 
 export function createApp(handle: DbHandle) {
   const app = new Hono();
+  const playgroundAuth = new WeakMap<object, { authorization: string; demo: string }>();
 
   app.use("*", cors({ origin: "*", allowHeaders: ["Authorization", "Content-Type", "x-demo-key", "x-internal-key"] }));
 
@@ -73,15 +74,42 @@ export function createApp(handle: DbHandle) {
     );
   });
 
-  const requireAgent = async (c: { req: { header: (n: string) => string | undefined } }) => {
-    const key = bearer(c.req.header("authorization"));
+  app.use("*", async (c, next) => {
+    const mode = c.req.header("x-offerlayer-playground");
+    if (mode === "shopper" || mode === "seller") {
+      const key = mode === "shopper" ? handle.env.demoAgentKey : handle.env.sellerAgentKey;
+      if (key && handle.env.demoKey) {
+        playgroundAuth.set(c.req.raw, { authorization: `Bearer ${key}`, demo: handle.env.demoKey });
+      }
+    }
+    await next();
+  });
+
+  const hdr = (
+    c: { req: { header: (n: string) => string | undefined; raw?: object } },
+    name: string,
+  ): string | undefined => {
+    const injected = c.req.raw ? playgroundAuth.get(c.req.raw) : undefined;
+    const sent = c.req.header(name);
+    if (sent) return sent;
+    if (name === "authorization") return injected?.authorization;
+    if (name === "x-demo-key") return injected?.demo;
+    return undefined;
+  };
+
+  const requireAgent = async (c: {
+    req: { header: (n: string) => string | undefined; raw?: object };
+  }) => {
+    const key = bearer(hdr(c, "authorization"));
     if (!key) throw jsonError("UNAUTHORIZED", "Missing agent bearer token", 401);
     const agent = lookupAgentByKey(handle, key);
     if (!agent) throw jsonError("UNAUTHORIZED", "Invalid agent key", 401);
     return agent;
   };
 
-  const requireShopper = async (c: { req: { header: (n: string) => string | undefined } }) => {
+  const requireShopper = async (c: {
+    req: { header: (n: string) => string | undefined; raw?: object };
+  }) => {
     const agent = await requireAgent(c);
     if (agent.role === "seller") {
       throw jsonError("ROLE_MISMATCH", "Seller keys cannot attach checkouts", 403);
@@ -89,7 +117,9 @@ export function createApp(handle: DbHandle) {
     return agent;
   };
 
-  const requireSeller = async (c: { req: { header: (n: string) => string | undefined } }) => {
+  const requireSeller = async (c: {
+    req: { header: (n: string) => string | undefined; raw?: object };
+  }) => {
     const agent = await requireAgent(c);
     if (agent.role !== "seller") {
       throw jsonError("ROLE_MISMATCH", "Shopper keys cannot manage seller shops", 403);
@@ -98,31 +128,33 @@ export function createApp(handle: DbHandle) {
   };
 
   const requireDemoOrAgent = async (c: {
-    req: { header: (n: string) => string | undefined };
+    req: { header: (n: string) => string | undefined; raw?: object };
   }) => {
-    const demo = c.req.header("x-demo-key");
+    const demo = hdr(c, "x-demo-key");
     if (demo && timingEqual(demo, handle.env.demoKey)) return { id: "agt_demo", role: "shopper", demo: true };
     return requireShopper(c);
   };
 
-  const requireDemoOrInternal = (c: { req: { header: (n: string) => string | undefined } }) => {
-    const demo = c.req.header("x-demo-key");
-    const internal = c.req.header("x-internal-key") ?? bearer(c.req.header("authorization"));
+  const requireDemoOrInternal = (c: {
+    req: { header: (n: string) => string | undefined; raw?: object };
+  }) => {
+    const demo = hdr(c, "x-demo-key");
+    const internal = c.req.header("x-internal-key") ?? bearer(hdr(c, "authorization"));
     if (demo && timingEqual(demo, handle.env.demoKey)) return;
     if (internal && timingEqual(internal, handle.env.internalApiKey)) return;
     throw jsonError("UNAUTHORIZED", "Demo or internal key required", 401);
   };
 
   const requireSellerOrDemoOrInternal = async (c: {
-    req: { header: (n: string) => string | undefined };
+    req: { header: (n: string) => string | undefined; raw?: object };
   }) => {
-    const demo = c.req.header("x-demo-key");
+    const demo = hdr(c, "x-demo-key");
     if (demo && timingEqual(demo, handle.env.demoKey)) return { id: "demo", role: "internal" };
     const internal = c.req.header("x-internal-key");
     if (internal && timingEqual(internal, handle.env.internalApiKey)) {
       return { id: "internal", role: "internal" };
     }
-    const authz = bearer(c.req.header("authorization"));
+    const authz = bearer(hdr(c, "authorization"));
     if (authz && timingEqual(authz, handle.env.internalApiKey)) {
       return { id: "internal", role: "internal" };
     }
@@ -130,9 +162,9 @@ export function createApp(handle: DbHandle) {
   };
 
   const requireDemoAndSeller = async (c: {
-    req: { header: (n: string) => string | undefined };
+    req: { header: (n: string) => string | undefined; raw?: object };
   }) => {
-    const demo = c.req.header("x-demo-key");
+    const demo = hdr(c, "x-demo-key");
     if (!demo || !timingEqual(demo, handle.env.demoKey)) {
       throw jsonError("UNAUTHORIZED", "Demo key required", 401);
     }
