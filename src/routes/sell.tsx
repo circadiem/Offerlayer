@@ -70,11 +70,12 @@ function Sell() {
 
   return (
     <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-8 sm:px-8 sm:py-12">
-      <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Seller agent</p>
-      <h1 className="mt-3 font-display text-4xl tracking-tight">Connect a real shop. Publish a funded offer.</h1>
+      <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">For merchants</p>
+      <h1 className="mt-3 font-display text-4xl tracking-tight">Publish a private discount.</h1>
       <p className="mt-3 text-muted-foreground">
-        A seller key cannot check out. The shop owner still has to approve Shopify install in the browser. Demo
-        Towels is the seed. This path is for your store.
+        It only applies when a customer buys through an AI agent. It is not a public coupon. Shopify
+        install is still a pilot on this site — your agent should follow the builder docs, then come back
+        here to set the amount.
       </p>
 
       <Card className="mt-8 space-y-4">

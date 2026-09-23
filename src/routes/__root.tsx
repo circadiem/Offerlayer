@@ -13,7 +13,8 @@ export const Route = createRootRoute({
       { title: APP_NAME },
       {
         name: "description",
-        content: "Merchants publish machine-readable purchase offers. Agents attach a signed token at checkout.",
+        content:
+          "A private discount for shoppers who buy through an AI agent. Not a public coupon. You set the amount. Your agent publishes it.",
       },
       { name: "theme-color", content: "#0a0a0b" },
     ],
@@ -51,31 +52,24 @@ function Root() {
                 <nav className="flex flex-wrap items-center gap-1 text-sm">
                   <Link
                     to="/"
+                    hash="how"
                     className="rounded-sm px-3 py-2 text-muted-foreground hover:text-foreground"
-                    activeProps={{ className: "rounded-sm px-3 py-2 text-foreground" }}
                   >
-                    Playground
+                    How it works
                   </Link>
                   <Link
-                    to="/sell"
+                    to="/"
+                    hash="merchants"
                     className="rounded-sm px-3 py-2 text-muted-foreground hover:text-foreground"
-                    activeProps={{ className: "rounded-sm px-3 py-2 text-foreground" }}
                   >
-                    Sell
-                  </Link>
-                  <Link
-                    to="/publish"
-                    className="rounded-sm px-3 py-2 text-muted-foreground hover:text-foreground"
-                    activeProps={{ className: "rounded-sm px-3 py-2 text-foreground" }}
-                  >
-                    Publish
+                    For merchants
                   </Link>
                   <Link
                     to="/connector"
                     className="rounded-sm px-3 py-2 text-muted-foreground hover:text-foreground"
                     activeProps={{ className: "rounded-sm px-3 py-2 text-foreground" }}
                   >
-                    Connector
+                    Builder docs
                   </Link>
                 </nav>
               </div>

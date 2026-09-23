@@ -9,7 +9,7 @@ export const Route = createFileRoute("/connector")({ component: Connector });
 const FALLBACK_ORIGIN = "https://offerlayer.vercel.app";
 
 function brief(origin: string): string {
-  return `You are connecting to Offerlayer, a purchase-offer protocol.
+  return `You are connecting to Offerlayer. The store owner wants a private discount that only applies when a customer buys through an AI agent. Do not make it a public coupon.
 
 Base URL: ${origin}
 Auth: Authorization: Bearer only. Do not HMAC-sign Offerlayer requests.
@@ -80,15 +80,15 @@ function Connector() {
 
   return (
     <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-8 sm:px-8 sm:py-12">
-      <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Muse connector</p>
+      <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Builder docs</p>
       <h1 className="mt-3 font-display text-3xl tracking-tight sm:text-4xl">
-        Two vaults.
-        <span className="mt-1 block">One protocol.</span>
+        For the agent.
+        <span className="mt-1 block">Not the store owner.</span>
       </h1>
       <p className="mt-3 text-muted-foreground">
-        Two Muse connectors (or two vault entries). Bearer only — no request HMAC. Seller thread: connect,
-        mandate, publish a real product gid. Shopper thread: disclose and wait for purchase approval every
-        time. Mixing keys returns ROLE_MISMATCH.
+        A store owner was told this is a private discount that only applies when a customer buys through an
+        AI agent. Follow the brief below. Do not create a public coupon. Do not look for API keys on this
+        page.
       </p>
 
       <div className="mt-8 grid gap-4 sm:grid-cols-2">

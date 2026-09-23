@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ConnectorRouteImport } from './routes/connector'
+import { Route as DemoRouteImport } from './routes/demo'
 import { Route as PublishRouteImport } from './routes/publish'
 import { Route as SellRouteImport } from './routes/sell'
 
@@ -22,6 +23,11 @@ const IndexRoute = IndexRouteImport.update({
 const ConnectorRoute = ConnectorRouteImport.update({
   id: '/connector',
   path: '/connector',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DemoRoute = DemoRouteImport.update({
+  id: '/demo',
+  path: '/demo',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PublishRoute = PublishRouteImport.update({
@@ -38,12 +44,14 @@ const SellRoute = SellRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/connector': typeof ConnectorRoute
+  '/demo': typeof DemoRoute
   '/publish': typeof PublishRoute
   '/sell': typeof SellRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/connector': typeof ConnectorRoute
+  '/demo': typeof DemoRoute
   '/publish': typeof PublishRoute
   '/sell': typeof SellRoute
 }
@@ -51,20 +59,22 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/connector': typeof ConnectorRoute
+  '/demo': typeof DemoRoute
   '/publish': typeof PublishRoute
   '/sell': typeof SellRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/connector' | '/publish' | '/sell'
+  fullPaths: '/' | '/connector' | '/demo' | '/publish' | '/sell'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/connector' | '/publish' | '/sell'
-  id: '__root__' | '/' | '/connector' | '/publish' | '/sell'
+  to: '/' | '/connector' | '/demo' | '/publish' | '/sell'
+  id: '__root__' | '/' | '/connector' | '/demo' | '/publish' | '/sell'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ConnectorRoute: typeof ConnectorRoute
+  DemoRoute: typeof DemoRoute
   PublishRoute: typeof PublishRoute
   SellRoute: typeof SellRoute
 }
@@ -83,6 +93,13 @@ declare module '@tanstack/react-router' {
       path: '/connector'
       fullPath: '/connector'
       preLoaderRoute: typeof ConnectorRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/demo': {
+      id: '/demo'
+      path: '/demo'
+      fullPath: '/demo'
+      preLoaderRoute: typeof DemoRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/publish': {
@@ -105,6 +122,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ConnectorRoute: ConnectorRoute,
+  DemoRoute: DemoRoute,
   PublishRoute: PublishRoute,
   SellRoute: SellRoute,
 }

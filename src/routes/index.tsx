@@ -1,323 +1,124 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { ArrowRight, Check, Layers, LoaderCircle } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { useState } from "react";
+import { ArrowRight, Check, Copy } from "lucide-react";
+import { buttonVariants } from "@/components/ui/button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  createCheckout,
-  getHealth,
-  searchOffers,
-  simulateClear,
-  simulatePurchase,
-  type Conversion,
-  type Offer,
-  type TrackedCheckout,
-  SEED_OFFER,
-} from "@/lib/offerlayer";
 
-export const Route = createFileRoute("/")({ component: Home });
+export const Route = createFileRoute("/")({ component: Landing });
 
-function Home() {
-  const [query, setQuery] = useState("towel");
-  const [shipTo, setShipTo] = useState("US");
-  const [offers, setOffers] = useState<Offer[]>([SEED_OFFER]);
-  const [selected, setSelected] = useState<Offer | null>(SEED_OFFER);
-  const [checkout, setCheckout] = useState<TrackedCheckout | null>(null);
-  const [conversion, setConversion] = useState<Conversion | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [apiOk, setApiOk] = useState<boolean | null>(null);
+const AGENT_INSTRUCTIONS = `Set up Offerlayer on my Shopify store. It is a private discount that only applies when a customer buys through an AI agent. Do not make it a public coupon. Read the builder docs on this site and follow them.`;
 
-  useEffect(() => {
-    let cancelled = false;
-    getHealth()
-      .then((h) => {
-        if (!cancelled) setApiOk(h.ok);
-      })
-      .catch(() => {
-        if (!cancelled) setApiOk(false);
-      });
-    searchOffers("towel", "US")
-      .then((list) => {
-        if (cancelled) return;
-        const next = list.length > 0 ? list : [SEED_OFFER];
-        setOffers(next);
-        setSelected(next[0] ?? null);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setOffers([SEED_OFFER]);
-        setSelected(SEED_OFFER);
-        setApiOk(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+const steps = [
+  {
+    title: "You publish it",
+    body: "Set the amount. It never becomes a public coupon.",
+  },
+  {
+    title: "The agent attaches it",
+    body: "When someone shops with an AI agent, that agent applies your discount.",
+  },
+  {
+    title: "The shopper sees it first",
+    body: "The amount is on the card before they pay. No surprise at the register.",
+  },
+];
 
-  const step = useMemo(() => {
-    if (conversion?.status === "cleared") return 4;
-    if (conversion?.status === "pending_hold") return 3;
-    if (checkout) return 2;
-    if (selected) return 1;
-    return 0;
-  }, [selected, checkout, conversion]);
+function Landing() {
+  const [copied, setCopied] = useState(false);
 
-  async function onSearch(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setBusy("search");
+  async function copyInstructions() {
     try {
-      const list = await searchOffers(query, shipTo);
-      const next = list.length > 0 ? list : query.trim().toLowerCase() === "towel" ? [SEED_OFFER] : [];
-      setOffers(next);
-      setSelected(next[0] ?? null);
-      setCheckout(null);
-      setConversion(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Search failed");
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function onCheckout() {
-    if (!selected) return;
-    setError(null);
-    setBusy("checkout");
-    try {
-      const result = await createCheckout(selected.id, `preview-${Date.now()}`);
-      setCheckout(result);
-      setConversion(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Checkout failed");
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function onPurchase() {
-    if (!checkout) return;
-    setError(null);
-    setBusy("purchase");
-    try {
-      const result = await simulatePurchase(checkout.token, `sha256:preview-${Date.now()}`);
-      setConversion(result);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Purchase failed");
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function onClear() {
-    if (!checkout) return;
-    setError(null);
-    setBusy("clear");
-    try {
-      const result = await simulateClear(checkout.token);
-      setConversion(result);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Clear failed");
-    } finally {
-      setBusy(null);
+      await navigator.clipboard.writeText(AGENT_INSTRUCTIONS);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setCopied(false);
     }
   }
 
   return (
-    <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-8 sm:py-12">
-      <section className="max-w-3xl">
+    <main className="mx-auto w-full max-w-6xl flex-1 px-4 pb-16 sm:px-8">
+      <section className="max-w-3xl pt-10 sm:pt-16">
         <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
-          Purchase-offer protocol
+          For Shopify stores
         </p>
-        <h1 className="mt-3 font-display text-4xl leading-tight tracking-tight sm:text-5xl">
-          Merchants publish offers. Agents attach a signed token. The buyer sees the reward first.
+        <h1 className="mt-4 font-display text-4xl leading-tight tracking-tight sm:text-6xl">
+          A private discount for shoppers who buy through an AI agent.
         </h1>
-        <p className="mt-5 max-w-2xl text-base text-muted-foreground sm:text-lg">
-          Offerlayer is not a store and not a catalog. Stamp a signed token onto Shop Pay — permalink for
-          the browser, agentic JSON for Muse — then simulate payment and the clawback hold.
+        <p className="mt-6 max-w-2xl text-base text-muted-foreground sm:text-lg">
+          Not a public coupon. You set the amount. Your agent publishes it. The shopper sees it before
+          they pay.
         </p>
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          <Badge>{apiOk === false ? "API offline" : apiOk ? "API live" : "Checking API"}</Badge>
-          <Badge>HMAC tokens</Badge>
-          <Badge>Disclosure required</Badge>
+        <div className="mt-8">
+          <button type="button" className={buttonVariants({ size: "lg" })} onClick={() => void copyInstructions()}>
+            {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+            {copied ? "Copied" : "Copy instructions for your agent"}
+          </button>
         </div>
       </section>
 
-      <ol className="mt-10 grid grid-cols-2 gap-2 text-xs uppercase tracking-wide text-muted-foreground sm:grid-cols-4">
-        {["Search", "Disclose + claim", "Simulate pay", "Clear hold"].map((label, i) => (
-          <li
-            key={label}
-            className={`rounded-md border px-3 py-2 ${i <= step ? "border-primary text-foreground" : "border-border"}`}
-          >
-            0{i + 1} {label}
-          </li>
-        ))}
-      </ol>
-
-      <div className="mt-8 grid gap-6 lg:grid-cols-5">
-        <div className="space-y-4 lg:col-span-3">
-          <Card>
-            <form onSubmit={onSearch} className="grid gap-4 sm:grid-cols-[1fr_88px_auto]">
-              <div>
-                <Label htmlFor="q">Query</Label>
-                <Input id="q" className="mt-2" value={query} onChange={(e) => setQuery(e.target.value)} />
-              </div>
-              <div>
-                <Label htmlFor="ship">Ship to</Label>
-                <Input
-                  id="ship"
-                  className="mt-2"
-                  maxLength={2}
-                  value={shipTo}
-                  onChange={(e) => setShipTo(e.target.value.toUpperCase())}
-                />
-              </div>
-              <div className="flex items-end">
-                <Button type="submit" disabled={busy === "search"}>
-                  {busy === "search" ? <LoaderCircle className="size-4 animate-spin" /> : "Search"}
-                </Button>
-              </div>
-            </form>
-          </Card>
-
-          {offers.length === 0 ? (
-            <Card>
-              <CardTitle>No live offers</CardTitle>
-              <CardDescription className="mt-2">
-                Try <span className="font-mono text-foreground">towel</span> and US, or publish a new
-                offer.
-              </CardDescription>
+      <section id="how" className="mt-20 scroll-mt-24 sm:mt-28">
+        <h2 className="font-display text-3xl tracking-tight sm:text-4xl">How it works</h2>
+        <div className="mt-8 grid gap-4 md:grid-cols-3">
+          {steps.map((s, i) => (
+            <Card key={s.title} className="space-y-3">
+              <span className="font-mono text-xs text-muted-foreground">0{i + 1}</span>
+              <CardTitle>{s.title}</CardTitle>
+              <CardDescription className="leading-relaxed">{s.body}</CardDescription>
             </Card>
-          ) : (
-            offers.map((offer) => (
-              <button
-                key={offer.id}
-                type="button"
-                onClick={() => {
-                  setSelected(offer);
-                  setCheckout(null);
-                  setConversion(null);
-                }}
-                className={`w-full text-left ${selected?.id === offer.id ? "ring-1 ring-primary" : ""} rounded-xl`}
-              >
-                <Card className="transition-colors duration-[var(--motion-quick)] hover:bg-surface-2">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="font-mono text-xs text-muted-foreground">{offer.id}</p>
-                      <CardTitle className="mt-1">{offer.selector.title ?? offer.id}</CardTitle>
-                      <CardDescription className="mt-1">
-                        {offer.merchant.name} · {offer.selector.list_price} {offer.selector.currency}
-                      </CardDescription>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xs uppercase tracking-wide text-muted-foreground">Buyer reward</p>
-                      <p className="tabular font-display text-2xl">
-                        {offer.reward.type === "flat" ? `$${offer.reward.amount}` : `${offer.reward.amount}%`}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="mt-4 rounded-md border border-border bg-background px-4 py-3">
-                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Disclosure</p>
-                    <p className="mt-1 text-sm leading-normal">{offer.disclosure}</p>
-                  </div>
-                </Card>
-              </button>
-            ))
-          )}
+          ))}
         </div>
+      </section>
 
-        <aside className="space-y-4 lg:col-span-2">
-          <Card>
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <Layers className="size-4" />
-              <span className="text-xs uppercase tracking-wide">Agent actions</span>
-            </div>
-            <p className="mt-3 text-sm text-muted-foreground">
-              The customer is the principal. The agent is a keyed channel. Rewards pay only on
-              qualified, paid, non-clawed-back orders.
-            </p>
-            <div className="mt-5 flex flex-col gap-2">
-              <Button onClick={onCheckout} disabled={!selected || busy !== null}>
-                Claim tracked checkout
-                <ArrowRight className="size-4" />
-              </Button>
-              <Button variant="outline" onClick={onPurchase} disabled={!checkout || busy !== null}>
-                Simulate $32 purchase
-              </Button>
-              <Button variant="secondary" onClick={onClear} disabled={conversion?.status !== "pending_hold" || busy !== null}>
-                Fast-forward hold
-              </Button>
-            </div>
-            {error ? <p className="mt-4 text-sm text-destructive">{error}</p> : null}
-          </Card>
+      <section className="mt-16 grid gap-4 md:grid-cols-2 sm:mt-20">
+        <Card id="merchants" className="scroll-mt-24 space-y-4 p-6 sm:p-8">
+          <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+            For merchants
+          </p>
+          <CardTitle className="font-display text-2xl sm:text-3xl">Your discount. Nobody else's coupon.</CardTitle>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            It only shows up when a customer buys through an AI agent. You choose the amount. It does not
+            leak into a code people can pass around.
+          </p>
+          <Link to="/sell" className={buttonVariants({ variant: "outline" })}>
+            Publish a discount
+            <ArrowRight className="size-4" />
+          </Link>
+        </Card>
+        <Card id="builders" className="scroll-mt-24 space-y-4 p-6 sm:p-8">
+          <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+            For agents
+          </p>
+          <CardTitle className="font-display text-2xl sm:text-3xl">The instructions live here.</CardTitle>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            If a store owner handed you this site, follow the builder docs. Do not invent a public coupon.
+          </p>
+          <Link to="/connector" className={buttonVariants({ variant: "outline" })}>
+            Read the builder docs
+            <ArrowRight className="size-4" />
+          </Link>
+        </Card>
+      </section>
 
-          {checkout ? (
-            <Card>
-              <CardTitle>Tracked checkout</CardTitle>
-              <p className="mt-2 break-all font-mono text-xs text-muted-foreground">{checkout.token}</p>
-              <p className="mt-3 text-sm">
-                Permalink contains token:{" "}
-                {(checkout.checkout?.permalink ?? checkout.checkout_url).includes(checkout.token)
-                  ? "yes"
-                  : "no"}
-              </p>
-              {checkout.checkout?.permalink?.includes("payment=shop_pay") ? (
-                <p className="mt-1 text-sm text-muted-foreground">Shop Pay attach on permalink</p>
-              ) : null}
-              {checkout.checkout?.agentic.warning === "NO_VARIANT_GID" ? (
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Seed product — agentic line items omitted (NO_VARIANT_GID)
-                </p>
-              ) : null}
-              <div className="mt-4">
-                <p className="text-xs uppercase tracking-wide text-muted-foreground">Permalink</p>
-                <p className="mt-1 break-all font-mono text-xs">
-                  {checkout.checkout?.permalink ?? checkout.checkout_url}
-                </p>
-              </div>
-              {checkout.checkout?.agentic ? (
-                <div className="mt-4">
-                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Agentic handoff</p>
-                  <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-background px-3 py-2 font-mono text-xs text-muted-foreground">
-                    {JSON.stringify(checkout.checkout.agentic, null, 2)}
-                  </pre>
-                </div>
-              ) : null}
-            </Card>
-          ) : null}
-
-          {conversion ? (
-            <Card>
-              <div className="flex items-center justify-between">
-                <CardTitle>Conversion</CardTitle>
-                <Badge className="text-foreground">{conversion.status.replaceAll("_", " ")}</Badge>
-              </div>
-              {conversion.hold_until ? (
-                <p className="mt-2 text-sm text-muted-foreground">Hold until {conversion.hold_until}</p>
-              ) : null}
-              <div className="mt-4 space-y-2">
-                {(conversion.payouts ?? []).map((p) => (
-                  <div key={p.party} className="flex items-center justify-between rounded-sm bg-background px-3 py-2">
-                    <span className="text-sm">{p.party}</span>
-                    <span className="tabular font-mono text-sm">
-                      ${p.amount} · {p.status}
-                    </span>
-                  </div>
-                ))}
-                {conversion.status === "cleared" ? (
-                  <p className="flex items-center gap-2 text-sm text-ok">
-                    <Check className="size-4" /> Buyer $4.00 and agent $0.64 stubbed
-                  </p>
-                ) : null}
-              </div>
-            </Card>
-          ) : null}
-        </aside>
-      </div>
+      <footer className="mt-20 border-t border-border pt-8">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <p className="text-sm text-muted-foreground">
+            <span className="font-display text-foreground">Offerlayer</span> — a private discount for AI
+            shopping.
+          </p>
+          <nav className="flex flex-wrap gap-1 text-sm">
+            <Link to="/demo" className="rounded-sm px-3 py-2 text-muted-foreground hover:text-foreground">
+              Playground
+            </Link>
+            <Link to="/sell" className="rounded-sm px-3 py-2 text-muted-foreground hover:text-foreground">
+              Merchants
+            </Link>
+            <Link to="/connector" className="rounded-sm px-3 py-2 text-muted-foreground hover:text-foreground">
+              Builder docs
+            </Link>
+          </nav>
+        </div>
+      </footer>
     </main>
   );
 }
