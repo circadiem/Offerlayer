@@ -4,7 +4,7 @@ application_url = "https://www.offerlayer.io"
 embedded = true
 
 [access_scopes]
-scopes = "read_products,read_orders,write_orders,read_customers,write_discounts"
+scopes = "read_products,read_orders,write_discounts"
 
 [auth]
 redirect_urls = [ "https://www.offerlayer.io/auth/callback" ]

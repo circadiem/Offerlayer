@@ -179,7 +179,7 @@ export function loadEnv(overrides: Partial<Record<string, string>> = {}): Offerl
     shopifyApiKey: get("SHOPIFY_API_KEY", ""),
     shopifyApiSecret: get("SHOPIFY_API_SECRET", demoMode ? SEED_DEFAULTS.shopifyApiSecret : ""),
     shopifyAppUrl,
-    shopifyScopes: get("SHOPIFY_SCOPES", "read_products,read_orders,write_orders,read_customers,write_discounts"),
+    shopifyScopes: get("SHOPIFY_SCOPES", "read_products,read_orders,write_discounts"),
     internalApiKey: get("INTERNAL_API_KEY", demoMode ? SEED_DEFAULTS.internalApiKey : ""),
     demoAgentKey: get("DEMO_AGENT_KEY", demoMode ? SEED_DEFAULTS.demoAgentKey : ""),
     museAgentKey: get("MUSE_AGENT_KEY", demoMode ? SEED_DEFAULTS.museAgentKey : ""),
