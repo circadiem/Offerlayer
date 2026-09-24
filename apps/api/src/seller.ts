@@ -45,6 +45,7 @@ import {
   FIXTURE_CATALOG_PRODUCTS,
   normalizeShopDomain,
   parseCatalogJson,
+  registerWebhooks,
   trackedCartUrl,
   withCheckoutTemplate,
   type CatalogProduct,
@@ -385,6 +386,25 @@ export function registerSellerRoutes(app: Hono, handle: DbHandle, auth: AuthFns)
         ? cached
         : FIXTURE_CATALOG_PRODUCTS.map((p) => withCheckoutTemplate(merchant.shopDomain, p));
     return c.json({ oauth: Boolean(merchant.accessTokenEnc), products });
+  });
+
+  app.post("/v1/seller/shops/:id/webhooks", async (c) => {
+    const seller = await auth.requireSeller(c);
+    const merchant = findMerchant(handle, c.req.param("id"));
+    if (!merchant) throw jsonError("MERCHANT_NOT_FOUND", "Shop not found", 404);
+    requireGrant(handle, seller.id, merchant.id);
+    if (!merchant.accessTokenEnc) {
+      throw jsonError("OAUTH_REQUIRED", "This shop has no Shopify token", 409);
+    }
+    const token = decryptAccessToken(merchant.accessTokenEnc, handle.env.tokenSecret);
+    const origin = requestPublicOrigin(c.req, handle.env);
+    const webhookUri = `${origin}/v1/webhooks/shopify`;
+    const hooks = await registerWebhooks({
+      shop: merchant.shopDomain,
+      accessToken: token,
+      webhookUri,
+    });
+    return c.json({ shop_domain: merchant.shopDomain, webhook_uri: webhookUri, webhooks: hooks });
   });
 
   app.post("/v1/simulate/connect_shop", async (c) => {
