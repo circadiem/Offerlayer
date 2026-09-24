@@ -188,7 +188,17 @@ export function registerShopifyAuthRoutes(app: Hono, handle: DbHandle) {
           <div class="card">
             <p>${connected.shop_domain} is bound to this seller agent.</p>
             <p class="muted">Link ${connected.pending_link_id} · merchant ${connected.merchant_id}</p>
-            <p class="muted">Webhooks ${hooks.filter((h) => h.ok).map((h) => h.topic).join(", ") || "will retry on next install"}: ${webhookUri}</p>
+            <p class="muted">Webhooks ${
+              hooks.filter((h) => h.ok).map((h) => h.topic).join(", ") || "were refused"
+            }: ${webhookUri}</p>
+            ${
+              hooks.some((h) => h.error)
+                ? `<p class="muted">${hooks
+                    .filter((h) => h.error)
+                    .map((h) => `${h.topic}: ${h.error}`)
+                    .join(" ")}</p>`
+                : ""
+            }
             <p class="muted">Publish offers on a real product gid from this shop, not Product/1001.</p>
           </div>
         </main>`,

@@ -30,7 +30,12 @@ async function getPool(): Promise<PgPool | null> {
   }
   try {
     const pg = await import("pg");
-    const created = new pg.Pool({ connectionString: url, max: 1, idleTimeoutMillis: 15_000 });
+    const created = new pg.Pool({
+      connectionString: url,
+      max: 1,
+      idleTimeoutMillis: 15_000,
+      ssl: /sslmode=(require|verify-full|verify-ca)/i.test(url) ? { rejectUnauthorized: false } : undefined,
+    });
     pool = created as unknown as PgPool;
     return pool;
   } catch (err) {

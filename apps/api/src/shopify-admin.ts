@@ -159,12 +159,17 @@ export async function registerWebhooks(args: {
   shop: string;
   accessToken: string;
   webhookUri: string;
-}): Promise<{ topic: string; ok: boolean }[]> {
+}): Promise<{ topic: string; ok: boolean; error?: string }[]> {
   const shop = normalizeShopDomain(args.shop);
-  const out: { topic: string; ok: boolean }[] = [];
-  for (const topic of WEBHOOK_TOPICS) {
+  const out: { topic: string; ok: boolean; error?: string }[] = [];
+  const topics = [
+    ["orders/paid", "ORDERS_PAID"],
+    ["orders/cancelled", "ORDERS_CANCELLED"],
+    ["refunds/create", "REFUNDS_CREATE"],
+  ] as const;
+  for (const [topic, gqlTopic] of topics) {
     try {
-      const res = await shopifyAdmin.fetch(`https://${shop}/admin/api/${SHOPIFY_API_VERSION}/webhooks.json`, {
+      const res = await shopifyAdmin.fetch(`https://${shop}/admin/api/2026-07/graphql.json`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -172,16 +177,37 @@ export async function registerWebhooks(args: {
           "x-shopify-access-token": args.accessToken,
         },
         body: JSON.stringify({
-          webhook: {
-            topic,
-            address: args.webhookUri,
-            format: "json",
+          query: `mutation webhookSubscriptionCreate($topic: WebhookSubscriptionTopic!, $webhookSubscription: WebhookSubscriptionInput!) {
+            webhookSubscriptionCreate(topic: $topic, webhookSubscription: $webhookSubscription) {
+              webhookSubscription { id }
+              userErrors { field message }
+            }
+          }`,
+          variables: {
+            topic: gqlTopic,
+            webhookSubscription: { callbackUrl: args.webhookUri, format: "JSON" },
           },
         }),
       });
-      out.push({ topic, ok: res.ok || res.status === 422 });
-    } catch {
-      out.push({ topic, ok: false });
+      const body = (await res.json().catch(() => ({}))) as {
+        data?: {
+          webhookSubscriptionCreate?: {
+            webhookSubscription?: { id?: string } | null;
+            userErrors?: { message?: string }[];
+          };
+        };
+        errors?: { message?: string }[];
+      };
+      const created = body.data?.webhookSubscriptionCreate;
+      const message =
+        created?.userErrors?.map((e) => e.message).filter(Boolean).join("; ") ||
+        body.errors?.map((e) => e.message).filter(Boolean).join("; ") ||
+        "";
+      const already = /already been taken|already exists/i.test(message);
+      const ok = Boolean(created?.webhookSubscription?.id) || already;
+      out.push({ topic, ok, error: ok ? undefined : message || `Shopify refused ${topic} (${res.status})` });
+    } catch (err) {
+      out.push({ topic, ok: false, error: err instanceof Error ? err.message : "webhook request failed" });
     }
   }
   return out;

@@ -35,8 +35,9 @@ describe("real Shopify OAuth + catalog", () => {
     agentKey = keys.demoAgentKey;
     shopSecret = env.shopifyApiSecret;
     app = createApp(handle);
-    shopifyAdmin.fetch = async (input) => {
+    shopifyAdmin.fetch = async (input, init) => {
       const url = String(input);
+      const raw = typeof init?.body === "string" ? init.body : "";
       if (url.includes("/admin/oauth/access_token")) {
         return new Response(JSON.stringify({ access_token: "shpat_live_test", scope: "read_products,read_orders" }), {
           status: 200,
@@ -54,6 +55,14 @@ describe("real Shopify OAuth + catalog", () => {
           status: 201,
           headers: { "content-type": "application/json" },
         });
+      }
+      if (url.includes("/graphql.json") && raw.includes("webhookSubscriptionCreate")) {
+        return new Response(
+          JSON.stringify({
+            data: { webhookSubscriptionCreate: { webhookSubscription: { id: "gid://shopify/WebhookSubscription/1" }, userErrors: [] } },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
       }
       if (url.includes("/graphql.json")) {
         return new Response(
