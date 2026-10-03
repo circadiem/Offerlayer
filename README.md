@@ -1,133 +1,125 @@
 # Offerlayer
 
-Offerlayer is how an agent lists a product so other agents can complete a disclosed, funded purchase.
+Offerlayer lets a Shopify store offer a price that AI shopping agents can find
+and apply. The merchant sets the discount, the eligible products, and a budget.
+An agent that finds the offer creates a single-use checkout, shows the shopper
+the discount before payment, and hands over a cart with the discount already
+on it. Every order is attributed back to the agent that brought it.
 
-Merchants (via a **seller agent**) publish machine-readable purchase offers. **Shopper agents** attach a signed token at checkout. The buyer sees a disclosed reward; an optional finder fee goes to the presenting agent after a refund hold.
+"Agent-only" is a channel incentive, not a secret: anyone shopping through an
+agent can get the price. What Offerlayer guarantees is that codes are
+single-use, tied to one cart, short-lived, budget-capped, and never published
+as a reusable coupon.
 
-This is **not** a store, catalog, or marketplace. Shopify Catalog still finds products.
+## How it fits together
 
-## Surfaces
+```mermaid
+flowchart LR
+  M[Merchant<br/>Shopify admin or seller agent] -- "publish offer, set limits" --> API
+  A[Shopper agent] -- "GET /v1/offers" --> API
+  A -- "POST /v1/checkouts" --> API
+  API -- "single-use discount code" --> S[(Merchant's Shopify store)]
+  API -- "cart link with code + agent_ref" --> A
+  A -- "shopper approves, pays" --> S
+  S -- "orders/paid, refunds webhooks" --> API
+  API --- DB[(Postgres)]
+```
 
-| Surface | Path |
-|---|---|
-| Public HTTP API | `apps/api` — Hono, port **8787** |
-| Protocol console | TanStack UI (playground, sell, publish, connector) |
-| MCP | `apps/mcp` — shopper tools and/or seller tools depending on which key is set |
-| Shopify publisher | `apps/shopify` — install + offer form; `seller_link` completes the grant after OAuth |
-| Demo | `pnpm demo` (shopper) · `pnpm demo:seller` · `pnpm demo:mandate` · `pnpm demo:shopify` · `pnpm demo:agentic` |
+| Piece | Where | What it does |
+| --- | --- | --- |
+| API | `apps/api` | Hono app: offers, checkouts, seller routes, Shopify OAuth and webhooks, scheduled jobs |
+| Web | `src/` | Site and docs (TanStack Start). In production, Nitro serves the site and mounts the API (`server/middleware/offerlayer-api.ts`) in one Vercel function |
+| MCP server | `apps/mcp` | Shopper or seller tools over MCP (stdio today) |
+| Shopify app | `apps/shopify` | Prototype install page; replaced by the embedded app in Phase 2 |
+| Packages | `packages/schema`, `packages/token`, `packages/db` | Offer schema and money math, signed checkout tokens, database schema, config, and migrations |
+| Protocol | `protocol/` | `openapi.yaml`, `offer.schema.json`, and the integration guide |
 
-## Run
+## Run it locally
+
+Requirements: Node 22 and pnpm 10 (`corepack enable`).
 
 ```bash
 pnpm install
-cp .env.example .env   # optional; defaults work for local demo
-pnpm seed              # prints hashed-at-rest agent keys
-pnpm test
-pnpm demo
-pnpm demo:seller
-pnpm demo:mandate
-pnpm demo:shopify
-pnpm demo:agentic
+cp .env.example .env
+# set OFFERLAYER_DEMO=1 in .env: public demo keys, an embedded database, demo data
+pnpm api        # API on http://127.0.0.1:8787
+pnpm dev        # site on http://127.0.0.1:8080, proxying API paths to :8787
 ```
 
-API (protocol):
+Demo mode uses PGlite, an embedded Postgres, stored in `./data/pglite`. Set
+`DATABASE_URL=memory:` for a throwaway database, or a `postgres://` URL to use
+a real one.
+
+End-to-end demos, each with its own in-memory database:
 
 ```bash
-pnpm api               # http://127.0.0.1:8787/health
+pnpm demo            # shopper: search, checkout, simulated purchase, hold cleared
+pnpm demo:seller     # seller: connect a shop, publish an offer
+pnpm demo:mandate    # seller limits (mandates)
+pnpm demo:shopify    # Shopify OAuth and catalog against a fake shop
+pnpm demo:agentic    # checkout handoff for agentic checkout
 ```
 
-Protocol console (this preview):
+MCP over stdio:
 
 ```bash
-pnpm dev               # UI on :8080, proxies /v1 to the API
+OFFERLAYER_URL=http://127.0.0.1:8787 OFFERLAYER_AGENT_KEY=agt_live_… pnpm mcp
 ```
 
-Shopify app (OAuth install route always boots):
+## Configuration
+
+Every variable is listed with a one-line description in `.env.example`, and
+typed and validated in `packages/db/src/env.ts`. A test fails if the two drift
+apart.
+
+Production (no `OFFERLAYER_DEMO`) refuses to boot without a `postgres://`
+`DATABASE_URL`, the three crypto secrets, the internal key, and the two
+bootstrap agent keys. See `docs/SECRETS.md` for each secret and how to rotate it.
+
+## Tests and checks
 
 ```bash
-pnpm shopify           # http://127.0.0.1:3000/auth/login
+pnpm typecheck
+pnpm lint
+pnpm test                                   # on PGlite
+TEST_DATABASE_URL=postgres://… pnpm test    # same suite on a real (throwaway) Postgres
 ```
 
-MCP stdio:
+CI (`.github/workflows/ci.yml`) runs the above on every pull request, plus the
+suite against Postgres 16, and boots the production build to check that no
+demo route is reachable (`pnpm check:prod-boot`).
 
-```bash
-OFFERLAYER_URL=http://127.0.0.1:8787 OFFERLAYER_AGENT_KEY=agt_live_... pnpm mcp
-OFFERLAYER_URL=http://127.0.0.1:8787 OFFERLAYER_SELLER_KEY=agt_sell_... pnpm mcp
-```
+## Deploy
 
-### Seed keys (also printed by `pnpm seed`)
+Vercel, from the repo root. `pnpm build` builds the site and API function,
+then runs `pnpm db:migrate`.
 
-> **Demo mode only.** These keys are public and are accepted only by hosts
-> running with `OFFERLAYER_DEMO=1` (local demos, `pnpm demo*`, the test
-> suite). A production host **refuses to boot** with them — it requires
-> operator-generated secrets (`TOKEN_SIGNING_SECRET`, `ACCESS_TOKEN_ENCRYPTION_KEY`,
-> `PRINCIPAL_HASH_SECRET`, `INTERNAL_API_KEY`, `DEMO_AGENT_KEY`, `MUSE_AGENT_KEY`, `SELLER_AGENT_KEY`; generate with
-> `openssl rand -hex 32`; see `docs/SECRETS.md`). Never paste a production key into a doc, chat, or
-> repo.
+1. Create a Supabase project and set `DATABASE_URL` (transaction pooler) and
+   `DATABASE_URL_DIRECT` (direct connection). See `docs/DATABASE.md`.
+2. Set the production secrets from `.env.example`.
+3. Point the domains at the deployment:
+   `www.offerlayer.io` (site), `api.offerlayer.io` (API and webhooks), and
+   `mcp.offerlayer.io` (MCP, once the remote server ships).
+4. Set `CRON_SECRET`. Vercel Cron runs the daily discount-code cleanup
+   (`vercel.json`).
 
-- Shopper demo: `agt_live_demo_v0_offerlayer_seed` (`agt_demo`) — Muse vault `OFFERLAYER_AGENT_KEY`
-- Muse shopper: `agt_live_muse_v0_offerlayer_seed` (`agt_muse`)
-- Seller demo: `agt_sell_demo_v0_offerlayer_seed` (`agt_seller`) — Muse vault `OFFERLAYER_SELLER_KEY`
-- Demo header: `x-demo-key: offerlayer_demo_v0`
-- Operator host: `https://offerlayer.vercel.app` (keys live in that host’s environment, not in this file)
-- Separate Grok publish: `https://offerlayer.grok.me` — not the same API
+Any deployed host needs Postgres, even in demo mode: the bundled server
+cannot run the embedded database.
 
-API keys are stored as SHA-256 hashes. Tokens are HMAC-SHA256 (`issueToken` / `verifyToken`) prefixed `olt_`. A key has exactly one role. Ed25519 is the upgrade path.
+## Docs
 
-## Shopify Partner credentials
+- `protocol/CONNECTOR.md`: integration guide for agent developers
+- `protocol/openapi.yaml`: API contract
+- `docs/DATABASE.md`: Postgres, Supabase, migrations, RLS
+- `docs/SECRETS.md`: secrets and rotation
+- `docs/SHOPIFY.md`: Shopify Partner app setup
+- `docs/ACCEPTANCE.md`: what must be true before a release
+- `docs/integrations/`: notes for specific agent platforms
+- `archive/`: superseded prototype briefs, kept for history
 
-Set these on the host. None of the URLs may stay on localhost:
+## Conventions
 
-```
-SHOPIFY_API_KEY=...
-SHOPIFY_API_SECRET=...
-APP_URL=https://offerlayer.vercel.app
-ACCESS_TOKEN_ENCRYPTION_KEY=...  # encrypts merchant access tokens (see docs/SECRETS.md)
-DATABASE_URL=postgres://...
-```
-
-Partners dashboard: App URL `https://offerlayer.vercel.app`, redirect `https://offerlayer.vercel.app/auth/callback`, webhook `https://offerlayer.vercel.app/v1/webhooks/shopify` (`orders/paid`, `orders/cancelled`, `refunds/create`). Until `SHOPIFY_API_KEY` is set, `/auth/login` does not redirect to Shopify. Use `POST /v1/simulate/shopify_oauth`.
-
-When those keys are set, `GET /auth/login?shop=…&seller_link=lnk_…` 302s to Shopify. The callback verifies HMAC, stores the access token encrypted, completes the seller link, and registers webhooks. Publish a **real product gid** from `GET /v1/seller/shops/{id}/products`, not `Product/1001`. Cart URL is `…/cart/{variant}:1?attributes[agent_ref]={token}`. Until `orders/paid` fires, conversion stays simulated.
-
-If the keys are empty, `/auth/login` still boots as a human page. `POST /v1/simulate/shopify_oauth` (seller Bearer + demo key) is the test stand-in.
-
-See `docs/SHOPIFY.md`.
-
-## Muse paste
-
-```
-You are connecting to Offerlayer, a purchase-offer protocol.
-
-Base URL: https://offerlayer.vercel.app
-
-Two credentials — never mix them in one flow. Put each in its own vault/thread.
-Do not copy keys off the website. The operator sets them.
-
-  OFFERLAYER_SELLER_KEY=agt_sell_…
-  OFFERLAYER_AGENT_KEY=agt_live_…
-
-Seller script (this thread, seller key only):
-  1. POST /v1/seller/links {"shop_domain":"demo-towels.myshopify.com"}
-     Show install_url + disclosure. URLs are on the base URL above.
-  2. Human opens install_url (or says yes in chat). Then:
-     POST /v1/seller/links/{pending_link_id}/complete
-       Authorization: Bearer $OFFERLAYER_SELLER_KEY
-       {"shop_domain":"demo-towels.myshopify.com"}
-  3. GET /v1/seller/shops — must be non-empty.
-  4. Propose a mandate, show card_text, activate only after the human says yes.
-  5. POST live $4 / 2% offer → 201 with mandate_id. $8 → 409 MANDATE_EXCEEDED.
-
-Shopper script (other thread, agent key only):
-  GET /v1/offers?q=towel&ship_to=US — show disclosure, then POST /v1/checkouts.
-  Simulate purchase. GET /v1/conversions/{token} → pending_hold is not paid.
-
-Full brief: protocol/CONNECTOR.md
-OpenAPI: /openapi.yaml
-```
-
-## Stack
-
-Node 22, TypeScript, ESM, pnpm workspaces, Hono, Postgres via Drizzle (Supabase in production, PGlite in tests and demos; see `docs/DATABASE.md`), Zod, Vitest, `@modelcontextprotocol/sdk`. Money is always decimal strings. Every public offer includes `disclosure`.
-
-See `GROK_BUILD.md`, `GROK_BUILD_V01.md`, `GROK_BUILD_V02.md`, `docs/ACCEPTANCE.md`, `docs/ACCEPTANCE_V01.md`, and `docs/ACCEPTANCE_V02.md`.
+- Money and percentages are decimal strings (`"32.00"`), never floats.
+- Every public offer carries a `disclosure` that agents must show before payment.
+- A key has one role: shopper (`agt_live_…`) or seller (`agt_sell_…`).
+- Never commit secrets or print real keys in docs, UI, or logs.

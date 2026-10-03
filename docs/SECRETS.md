@@ -10,7 +10,7 @@ the public demo values. Generate each with `openssl rand -hex 32`.
 | `ACCESS_TOKEN_ENCRYPTION_KEY` | Encrypts merchant Shopify access tokens at rest (AES-256-GCM) | 32 |
 | `PRINCIPAL_HASH_SECRET` | HMAC for shopper identifiers: `principal_ref` and order emails | 32 |
 | `INTERNAL_API_KEY` | Operator access to `/v1/internal/*`, including the cleanup job | 16 |
-| `DEMO_AGENT_KEY`, `MUSE_AGENT_KEY`, `SELLER_AGENT_KEY` | Seeded agent API keys (until self-serve keys ship) | 16 |
+| `SHOPPER_AGENT_KEY`, `SELLER_AGENT_KEY` | Bootstrap agent API keys, seeded as `agt_shopper` and `agt_seller` (until self-serve keys ship) | 16 |
 | `SHOPIFY_API_SECRET` | Shopify OAuth and webhook HMAC (required when `SHOPIFY_API_KEY` is set) | — |
 | `CRON_SECRET` (optional) | Bearer that Vercel Cron sends to the cleanup job | 16 |
 
