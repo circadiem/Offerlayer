@@ -7,9 +7,9 @@ function headers(map: Record<string, string>) {
 }
 
 describe("requestPublicOrigin", () => {
-  const env = loadEnv({ DATABASE_URL: "file::memory:" });
+  const env = loadEnv({ DATABASE_URL: "memory:" });
 
-  it("uses x-forwarded-host over loopback env", () => {
+  it("uses x-forwarded-host over loopback env", async () => {
     const origin = requestPublicOrigin(
       headers({ "x-forwarded-host": "offerlayer.grok.me", "x-forwarded-proto": "https" }),
       env,
@@ -17,7 +17,7 @@ describe("requestPublicOrigin", () => {
     expect(origin).toBe("https://offerlayer.grok.me");
   });
 
-  it("rewrites stored localhost install URLs", () => {
+  it("rewrites stored localhost install URLs", async () => {
     const next = rewritePublicUrl(
       "http://localhost:3000/auth/login?seller_link=lnk_x",
       PRODUCTION_ORIGIN,
@@ -26,7 +26,7 @@ describe("requestPublicOrigin", () => {
     expect(next).not.toContain(":3000");
   });
 
-  it("strips a stray port on an already-public install URL", () => {
+  it("strips a stray port on an already-public install URL", async () => {
     const next = rewritePublicUrl(
       "https://offerlayer.grok.me:3000/auth/login?seller_link=lnk_x",
       PRODUCTION_ORIGIN,
@@ -34,7 +34,7 @@ describe("requestPublicOrigin", () => {
     expect(next).toBe("https://offerlayer.grok.me/auth/login?seller_link=lnk_x");
   });
 
-  it("strips stray ports from public hosts", () => {
+  it("strips stray ports from public hosts", async () => {
     const origin = requestPublicOrigin(
       headers({ host: "offerlayer.grok.me:3000", "x-forwarded-proto": "https" }),
       env,
@@ -42,7 +42,7 @@ describe("requestPublicOrigin", () => {
     expect(origin).toBe("https://offerlayer.grok.me");
   });
 
-  it("on Vercel without Host falls back to offerlayer.grok.me", () => {
+  it("on Vercel without Host falls back to offerlayer.grok.me", async () => {
     const prev = process.env.VERCEL;
     process.env.VERCEL = "1";
     try {

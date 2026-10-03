@@ -1,9 +1,6 @@
 // Demo scripts always run in demo mode (public demo keys). Production entrypoints
 // (apps/api, apps/mcp, apps/shopify) must NOT set this — they fail closed.
 process.env.OFFERLAYER_DEMO ??= "1";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { serve } from "@hono/node-server";
 import { loadEnv, openDatabase, seedDatabase } from "@offerlayer/db";
 import { createApp } from "../apps/api/src/app.ts";
@@ -24,17 +21,16 @@ async function req(
 }
 
 async function main(): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), "offerlayer-seller-demo-"));
-  const env = loadEnv({ DATABASE_URL: `file:${join(dir, "demo.db")}` });
-  const handle = openDatabase(env);
-  const keys = seedDatabase(handle);
+  const env = loadEnv({ DATABASE_URL: "memory:" });
+  const handle = await openDatabase(env);
+  const keys = await seedDatabase(handle);
   const app = createApp(handle);
   let stop: (() => void) | undefined;
   const port = await new Promise<number>((resolve) => {
     const server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" }, (info) => resolve(info.port));
     stop = () => {
       server.close();
-      handle.sqlite.close();
+      void handle.close();
     };
   });
   try {

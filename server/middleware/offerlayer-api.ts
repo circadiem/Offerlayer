@@ -2,10 +2,9 @@
  * Mount the Offerlayer Hono API on the Nitro/Vercel server so production
  * preview (and deploy) serve /health and /v1 without a separate process.
  *
- * Health is answered here with no native modules and no filesystem writes so
- * Muse (and any agent) can reach the protocol even if SQLite fails to open.
- * The SQLite protocol store lives on a writable path (/tmp on Vercel) and is
- * snapshotted to Neon when DATABASE_URL is postgres.
+ * Health is answered here without touching the database, so agents can reach
+ * the protocol even if Postgres is unreachable. Each serverless instance keeps
+ * one small connection pool (see @offerlayer/db openDatabase).
  */
 import { VERSION } from "../../apps/api/src/version.ts";
 
@@ -22,7 +21,6 @@ const CORS = {
 
 type Booted = {
   app: { fetch: (req: Request) => Response | Promise<Response> };
-  persistAfterWrite: () => Promise<void>;
 };
 
 let bootPromise: Promise<Booted> | null = null;
@@ -95,21 +93,13 @@ async function boot(): Promise<Booted> {
   log({
     level: "info",
     msg: "offerlayer_boot",
-    sqlite_path: env.databasePath,
-    durable: env.durablePostgres,
+    database: env.database.kind,
+    demo: env.demoMode,
     public_base: env.publicBaseUrl,
   });
-  if (env.durablePostgres && env.databasePath !== ":memory:") {
-    const restored = await db.restoreSqliteFile(env.databasePath);
-    log({ level: "info", msg: "sqlite_restore", restored });
-  }
-  const handle = db.openDatabase(env);
-  db.seedDatabase(handle);
-  const app = createApp(handle);
-  return {
-    app,
-    persistAfterWrite: () => db.persistSqliteHandle(handle),
-  };
+  const handle = await db.openDatabase(env);
+  await db.seedDatabase(handle);
+  return { app: createApp(handle) };
 }
 
 function getBoot(): Promise<Booted> {
@@ -138,16 +128,7 @@ export default async function offerlayerApi(
   try {
     const booted = await getBoot();
     const req = toFetchRequest(event);
-    const res = await booted.app.fetch(req);
-    const method = req.method.toUpperCase();
-    // Vercel Cron calls jobs with GET, and jobs write.
-    const writes = (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") || path.startsWith("/v1/internal/jobs/");
-    if (writes) {
-      await booted.persistAfterWrite().catch((err) => {
-        log({ level: "error", msg: "persist_failed", error: safeMessage(err) });
-      });
-    }
-    return res;
+    return await booted.app.fetch(req);
   } catch (err) {
     log({
       level: "error",

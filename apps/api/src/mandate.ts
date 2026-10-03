@@ -100,13 +100,13 @@ function exceededCard(shopDomain: string, detail: string, until?: string): strin
   return `Allow Offerlayer to ${detail} on ${shopDomain}${through}? Confirm a new or amended mandate. Do not retry the write until it is active.`;
 }
 
-export function loadActiveMandate(
+export async function loadActiveMandate(
   handle: DbHandle,
   sellerAgentId: string,
   merchantId: string,
   now = new Date(),
-): MandateRow | null {
-  const rows = handle.db
+): Promise<MandateRow | null> {
+  const rows = (await handle.db
     .select()
     .from(mandates)
     .where(
@@ -116,15 +116,15 @@ export function loadActiveMandate(
         eq(mandates.status, "active"),
       ),
     )
-    .all();
+    );
   const row = rows[0] ?? null;
   if (!row) return null;
   if (new Date(row.expiresAt).getTime() <= now.getTime()) {
-    handle.db
+    await handle.db
       .update(mandates)
       .set({ status: "expired", updatedAt: now.toISOString() })
       .where(eq(mandates.id, row.id))
-      .run();
+      ;
     return null;
   }
   return row;
@@ -168,18 +168,18 @@ function worstCaseReward(write: MandateWrite): string {
   return computePayout({ type: "percent", amount: write.rewardAmount, orderTotal: base });
 }
 
-function scopedOfferRows(handle: DbHandle, sellerAgentId: string, merchantId: string) {
-  const sellerMandates = handle.db
+async function scopedOfferRows(handle: DbHandle, sellerAgentId: string, merchantId: string) {
+  const sellerMandates = (await handle.db
     .select()
     .from(mandates)
     .where(and(eq(mandates.sellerAgentId, sellerAgentId), eq(mandates.merchantId, merchantId)))
-    .all();
+    );
   const manIds = new Set(sellerMandates.map((m) => m.id));
-  return handle.db
+  return (await handle.db
     .select()
     .from(offers)
     .where(eq(offers.merchantId, merchantId))
-    .all()
+    )
     .filter((o) => o.mandateId && manIds.has(o.mandateId));
 }
 
@@ -188,28 +188,28 @@ function scopedOfferRows(handle: DbHandle, sellerAgentId: string, merchantId: st
  * every paid order still standing (pending hold or cleared), net of refunds.
  * Payout rows are only written when a hold clears, so they cannot be used here.
  */
-function dailyRewardUsed(
+async function dailyRewardUsed(
   handle: DbHandle,
   sellerAgentId: string,
   merchantId: string,
   now: Date,
-): string {
-  const scoped = scopedOfferRows(handle, sellerAgentId, merchantId);
+): Promise<string> {
+  const scoped = await scopedOfferRows(handle, sellerAgentId, merchantId);
   if (scoped.length === 0) return "0.00";
   const byId = new Map(scoped.map((o) => [o.id, o]));
   const day = now.toISOString().slice(0, 10);
-  const tokenRows = handle.db
+  const tokenRows = (await handle.db
     .select()
     .from(tokens)
     .where(inArray(tokens.offerId, [...byId.keys()]))
-    .all();
+    );
   const offerByToken = new Map(tokenRows.map((t) => [t.tokenId, byId.get(t.offerId)]));
   let sum = "0.00";
-  const orders = handle.db
+  const orders = (await handle.db
     .select()
     .from(ordersExt)
     .where(eq(ordersExt.merchantId, merchantId))
-    .all()
+    )
     .filter(
       (o) =>
         offerByToken.has(o.tokenId) &&
@@ -230,21 +230,21 @@ function dailyRewardUsed(
 }
 
 /** Worst-case discount still claimable by issued, unused, unexpired checkouts. */
-function outstandingExposure(
+async function outstandingExposure(
   handle: DbHandle,
   sellerAgentId: string,
   merchantId: string,
   now: Date,
-): string {
-  const scoped = scopedOfferRows(handle, sellerAgentId, merchantId);
+): Promise<string> {
+  const scoped = await scopedOfferRows(handle, sellerAgentId, merchantId);
   if (scoped.length === 0) return "0.00";
   const byId = new Map(scoped.map((o) => [o.id, o]));
   const nowSec = Math.floor(now.getTime() / 1000);
-  const open = handle.db
+  const open = (await handle.db
     .select()
     .from(tokens)
     .where(and(inArray(tokens.offerId, [...byId.keys()]), isNull(tokens.consumedAt), gt(tokens.exp, nowSec)))
-    .all();
+    );
   let sum = "0.00";
   for (const t of open) {
     const offer = byId.get(t.offerId);
@@ -276,14 +276,14 @@ function writeFromRow(row: typeof offers.$inferSelect): MandateWrite {
  *
  * Offers with no mandate (operator-created via /v1/internal) are not capped here.
  */
-export function requireCheckoutWithinLimits(
+export async function requireCheckoutWithinLimits(
   handle: DbHandle,
   offerRow: typeof offers.$inferSelect,
   now = new Date(),
-): void {
+): Promise<void> {
   if (!offerRow.mandateId) return;
-  const original = handle.db.select().from(mandates).where(eq(mandates.id, offerRow.mandateId)).get();
-  const current = original ? loadActiveMandate(handle, original.sellerAgentId, offerRow.merchantId, now) : null;
+  const original = (await handle.db.select().from(mandates).where(eq(mandates.id, offerRow.mandateId)).limit(1))[0];
+  const current = original ? await loadActiveMandate(handle, original.sellerAgentId, offerRow.merchantId, now) : null;
   if (!original || !current) {
     throw jsonError("OFFER_UNAVAILABLE", "The merchant's limits for this offer are not active", 409);
   }
@@ -291,15 +291,15 @@ export function requireCheckoutWithinLimits(
   if (capExceeded(offerRow.rewardType, offerRow.rewardAmount, caps.max_reward_flat, caps.max_reward_percent)) {
     throw jsonError("OFFER_UNAVAILABLE", "This offer's discount is above the merchant's current limit", 409);
   }
-  const used = dailyRewardUsed(handle, original.sellerAgentId, offerRow.merchantId, now);
-  const open = outstandingExposure(handle, original.sellerAgentId, offerRow.merchantId, now);
+  const used = await dailyRewardUsed(handle, original.sellerAgentId, offerRow.merchantId, now);
+  const open = await outstandingExposure(handle, original.sellerAgentId, offerRow.merchantId, now);
   const projected = addMoney(addMoney(used, open), worstCaseReward(writeFromRow(offerRow)));
   if (compareMoney(projected, caps.max_daily_liability) > 0) {
     throw jsonError("BUDGET_EXHAUSTED", "The merchant's budget for this offer is used up for today", 409);
   }
 }
 
-export function requireMandateForWrite(
+export async function requireMandateForWrite(
   handle: DbHandle,
   args: {
     sellerAgentId: string;
@@ -307,10 +307,10 @@ export function requireMandateForWrite(
     write: MandateWrite;
     now?: Date;
   },
-): MandateRow {
+): Promise<MandateRow> {
   const now = args.now ?? new Date();
   const merchant = args.merchant;
-  const row = loadActiveMandate(handle, args.sellerAgentId, merchant.id, now);
+  const row = await loadActiveMandate(handle, args.sellerAgentId, merchant.id, now);
   if (!row) {
     throw jsonError(
       "MANDATE_REQUIRED",
@@ -399,15 +399,15 @@ export function requireMandateForWrite(
     );
   }
 
-  const used = dailyRewardUsed(handle, args.sellerAgentId, merchant.id, now);
+  const used = await dailyRewardUsed(handle, args.sellerAgentId, merchant.id, now);
   const next = worstCaseReward(write);
   const projected = addMoney(used, next);
   if (compareMoney(projected, caps.max_daily_liability) > 0) {
-    handle.db
+    await handle.db
       .update(mandates)
       .set({ status: "exceeded", updatedAt: now.toISOString() })
       .where(eq(mandates.id, row.id))
-      .run();
+      ;
     throw jsonError(
       "MANDATE_EXCEEDED",
       `Daily liability ${projected} would exceed cap ${caps.max_daily_liability}`,
@@ -422,7 +422,7 @@ export function requireMandateForWrite(
   return row;
 }
 
-export function proposeMandate(
+export async function proposeMandate(
   handle: DbHandle,
   sellerAgentId: string,
   merchant: { id: string; shopDomain: string; name: string },
@@ -442,7 +442,7 @@ export function proposeMandate(
   });
   const id = newId("man_");
   const ts = now.toISOString();
-  handle.db
+  await handle.db
     .insert(mandates)
     .values({
       id,
@@ -460,13 +460,13 @@ export function proposeMandate(
       createdAt: ts,
       updatedAt: ts,
     })
-    .run();
-  const row = handle.db.select().from(mandates).where(eq(mandates.id, id)).get();
+    ;
+  const row = (await handle.db.select().from(mandates).where(eq(mandates.id, id)).limit(1))[0];
   if (!row) throw jsonError("INTERNAL", "Failed to store mandate", 500);
   return rowToMandate(row, merchant);
 }
 
-export function activateMandate(
+export async function activateMandate(
   handle: DbHandle,
   sellerAgentId: string,
   mandateId: string,
@@ -476,23 +476,23 @@ export function activateMandate(
   if (humanConfirmed !== true) {
     throw jsonError("CONFIRMATION_REQUIRED", "human_confirmed must be true after the human approved card_text", 400);
   }
-  const row = handle.db.select().from(mandates).where(eq(mandates.id, mandateId)).get();
+  const row = (await handle.db.select().from(mandates).where(eq(mandates.id, mandateId)).limit(1))[0];
   if (!row || row.sellerAgentId !== sellerAgentId) {
     throw jsonError("MANDATE_NOT_FOUND", "Mandate not found", 404);
   }
   if (row.status === "revoked") throw jsonError("MANDATE_REVOKED", "Mandate is revoked", 409);
   if (new Date(row.expiresAt).getTime() <= now.getTime()) {
-    handle.db
+    await handle.db
       .update(mandates)
       .set({ status: "expired", updatedAt: now.toISOString() })
       .where(eq(mandates.id, row.id))
-      .run();
+      ;
     throw jsonError("MANDATE_EXPIRED", "Mandate has expired", 410);
   }
   if (row.status !== "proposed" && row.status !== "active") {
     throw jsonError("MANDATE_INVALID", `Cannot activate mandate in status ${row.status}`, 409);
   }
-  const others = handle.db
+  const others = (await handle.db
     .select()
     .from(mandates)
     .where(
@@ -502,56 +502,56 @@ export function activateMandate(
         eq(mandates.status, "active"),
       ),
     )
-    .all();
+    );
   const ts = now.toISOString();
   for (const other of others) {
     if (other.id === row.id) continue;
-    handle.db
+    await handle.db
       .update(mandates)
       .set({ status: "revoked", revokedAt: ts, supersededBy: row.id, updatedAt: ts })
       .where(eq(mandates.id, other.id))
-      .run();
+      ;
   }
-  handle.db
+  await handle.db
     .update(mandates)
     .set({ status: "active", humanConfirmedAt: ts, updatedAt: ts })
     .where(eq(mandates.id, row.id))
-    .run();
-  const merchant = handle.db.select().from(merchants).where(eq(merchants.id, row.merchantId)).get();
-  const updated = handle.db.select().from(mandates).where(eq(mandates.id, row.id)).get();
+    ;
+  const merchant = (await handle.db.select().from(merchants).where(eq(merchants.id, row.merchantId)).limit(1))[0];
+  const updated = (await handle.db.select().from(mandates).where(eq(mandates.id, row.id)).limit(1))[0];
   if (!updated || !merchant) throw jsonError("INTERNAL", "Mandate missing after activate", 500);
   return rowToMandate(updated, merchant);
 }
 
-export function revokeMandate(
+export async function revokeMandate(
   handle: DbHandle,
   mandateId: string,
   opts: { sellerAgentId?: string; pauseOffers?: boolean; demo?: boolean },
   now = new Date(),
 ) {
-  const row = handle.db.select().from(mandates).where(eq(mandates.id, mandateId)).get();
+  const row = (await handle.db.select().from(mandates).where(eq(mandates.id, mandateId)).limit(1))[0];
   if (!row) throw jsonError("MANDATE_NOT_FOUND", "Mandate not found", 404);
   if (!opts.demo && opts.sellerAgentId && row.sellerAgentId !== opts.sellerAgentId) {
     throw jsonError("MANDATE_NOT_FOUND", "Mandate not found", 404);
   }
   const ts = now.toISOString();
-  handle.db
+  await handle.db
     .update(mandates)
     .set({ status: "revoked", revokedAt: ts, updatedAt: ts })
     .where(eq(mandates.id, row.id))
-    .run();
+    ;
   if (opts.pauseOffers) {
-    const live = handle.db.select().from(offers).where(eq(offers.mandateId, row.id)).all();
+    const live = (await handle.db.select().from(offers).where(eq(offers.mandateId, row.id)));
     for (const offer of live) {
-      handle.db
+      await handle.db
         .update(offers)
         .set({ status: "paused", updatedAt: ts })
         .where(eq(offers.id, offer.id))
-        .run();
+        ;
     }
   }
-  const merchant = handle.db.select().from(merchants).where(eq(merchants.id, row.merchantId)).get();
-  const updated = handle.db.select().from(mandates).where(eq(mandates.id, row.id)).get();
+  const merchant = (await handle.db.select().from(merchants).where(eq(merchants.id, row.merchantId)).limit(1))[0];
+  const updated = (await handle.db.select().from(mandates).where(eq(mandates.id, row.id)).limit(1))[0];
   if (!updated || !merchant) throw jsonError("INTERNAL", "Mandate missing after revoke", 500);
   return rowToMandate(updated, merchant);
 }

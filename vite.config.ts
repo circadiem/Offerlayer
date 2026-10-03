@@ -167,10 +167,12 @@ export default defineConfig(({ command, isPreview }) => ({
     allowedHosts: true,
   },
   optimizeDeps: {
-    exclude: ["better-sqlite3"],
+    exclude: ["@electric-sql/pglite"],
   },
   ssr: {
-    external: ["better-sqlite3"],
+    // Loaded at runtime from node_modules: pg (production Postgres) and
+    // PGlite (local demo), both imported dynamically by @offerlayer/db.
+    external: ["pg", "@electric-sql/pglite"],
   },
   resolve: { tsconfigPaths: true },
   plugins: [

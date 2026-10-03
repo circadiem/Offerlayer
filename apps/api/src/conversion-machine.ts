@@ -35,7 +35,11 @@ import { buildCheckoutHandoff } from "./checkout-attach.ts";
 import { jsonError } from "./errors.ts";
 import { logJson } from "./logger.ts";
 import { requireCheckoutWithinLimits } from "./mandate.ts";
-import { createCheckoutDiscount, decryptAccessToken, oneTimeDiscountCode } from "./shopify-admin.ts";
+import {
+  createCheckoutDiscount,
+  decryptAccessToken,
+  oneTimeDiscountCode,
+} from "./shopify-admin.ts";
 
 export function trackedUrl(template: string, token: string): string {
   if (template.includes("{token}")) return template.replaceAll("{token}", token);
@@ -47,23 +51,30 @@ function startOfUtcDay(d: Date): string {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString();
 }
 
-export function loadOffer(
+export async function loadOffer(
   handle: DbHandle,
   offerId: string,
-): {
+): Promise<{
   offer: Offer;
   row: typeof offers.$inferSelect;
   merchant: typeof merchants.$inferSelect;
-} {
-  const row = handle.db.select().from(offers).where(eq(offers.id, offerId)).get();
+}> {
+  const row = (await handle.db.select().from(offers).where(eq(offers.id, offerId)).limit(1))[0];
   if (!row) throw jsonError("OFFER_NOT_FOUND", "Offer not found", 404);
-  const merchant = handle.db.select().from(merchants).where(eq(merchants.id, row.merchantId)).get();
+  const merchant = (
+    await handle.db.select().from(merchants).where(eq(merchants.id, row.merchantId)).limit(1)
+  )[0];
   if (!merchant) throw jsonError("MERCHANT_NOT_FOUND", "Merchant missing for offer", 500);
   return { offer: rowToOffer(row, merchant), row, merchant };
 }
 
 /** Verify against the current signing secret, then the previous one during a rotation. */
-function verifyWithRotation(token: string, handle: DbHandle, now: Date, opts: { ignoreExpiry?: boolean } = {}) {
+function verifyWithRotation(
+  token: string,
+  handle: DbHandle,
+  now: Date,
+  opts: { ignoreExpiry?: boolean } = {},
+) {
   try {
     return verifyToken(token, handle.env.tokenSigningSecret, now, opts);
   } catch (err) {
@@ -73,12 +84,14 @@ function verifyWithRotation(token: string, handle: DbHandle, now: Date, opts: { 
   }
 }
 
-function countTokens(handle: DbHandle, where: ReturnType<typeof and>): number {
-  const row = handle.db
-    .select({ n: sql<number>`count(*)` })
-    .from(tokens)
-    .where(where)
-    .get();
+async function countTokens(handle: DbHandle, where: ReturnType<typeof and>): Promise<number> {
+  const row = (
+    await handle.db
+      .select({ n: sql<number>`count(*)` })
+      .from(tokens)
+      .where(where)
+      .limit(1)
+  )[0];
   return Number(row?.n ?? 0);
 }
 
@@ -87,8 +100,8 @@ function countTokens(handle: DbHandle, where: ReturnType<typeof and>): number {
  * table, so limits hold across processes that share the database. Throws 429
  * before anything is written or sent to Shopify.
  */
-function enforceRateLimit(handle: DbHandle, issuedBy: string, now: Date): void {
-  const agent = handle.db.select().from(agents).where(eq(agents.id, issuedBy)).get();
+async function enforceRateLimit(handle: DbHandle, issuedBy: string, now: Date): Promise<void> {
+  const agent = (await handle.db.select().from(agents).where(eq(agents.id, issuedBy)).limit(1))[0];
   const perMinute = agent?.ratePerMinute ?? handle.env.limits.checkoutsPerMinute;
   const perDay = agent?.ratePerDay ?? handle.env.limits.checkoutsPerDay;
   const windows: [number, number, string][] = [
@@ -97,11 +110,19 @@ function enforceRateLimit(handle: DbHandle, issuedBy: string, now: Date): void {
   ];
   for (const [seconds, limit, label] of windows) {
     const since = new Date(now.getTime() - seconds * 1000).toISOString();
-    const used = countTokens(handle, and(eq(tokens.issuedBy, issuedBy), gte(tokens.createdAt, since)));
+    const used = await countTokens(
+      handle,
+      and(eq(tokens.issuedBy, issuedBy), gte(tokens.createdAt, since)),
+    );
     if (used >= limit) {
-      throw jsonError("RATE_LIMITED", `Checkout limit for this key reached (${limit} per ${label})`, 429, {
-        retry_after_seconds: label === "minute" ? 60 : 3600,
-      });
+      throw jsonError(
+        "RATE_LIMITED",
+        `Checkout limit for this key reached (${limit} per ${label})`,
+        429,
+        {
+          retry_after_seconds: label === "minute" ? 60 : 3600,
+        },
+      );
     }
   }
 }
@@ -120,7 +141,7 @@ export async function issueCheckout(
     exp?: number;
   },
 ) {
-  const { offer, row, merchant } = loadOffer(handle, args.offerId);
+  const { offer, row, merchant } = await loadOffer(handle, args.offerId);
   if (offer.status !== "live") {
     throw jsonError("OFFER_NOT_LIVE", "Offer is not live", 409);
   }
@@ -128,13 +149,17 @@ export async function issueCheckout(
   const limits = handle.env.limits;
 
   // Every check below runs before a token row or a Shopify discount exists.
-  if (args.issuedBy) enforceRateLimit(handle, args.issuedBy, now);
+  if (args.issuedBy) await enforceRateLimit(handle, args.issuedBy, now);
 
   const principalHash = hashPrincipal(args.principalRef, handle.env.principalHashSecret);
   if (principalHash === "anon") {
-    const today = countTokens(
+    const today = await countTokens(
       handle,
-      and(eq(tokens.offerId, offer.id), eq(tokens.principalHash, "anon"), gte(tokens.createdAt, startOfUtcDay(now))),
+      and(
+        eq(tokens.offerId, offer.id),
+        eq(tokens.principalHash, "anon"),
+        gte(tokens.createdAt, startOfUtcDay(now)),
+      ),
     );
     if (today >= limits.anonCheckoutsPerOfferPerDay) {
       throw jsonError(
@@ -147,24 +172,29 @@ export async function issueCheckout(
   }
 
   const nowSec = Math.floor(now.getTime() / 1000);
-  const outstanding = countTokens(
+  const outstanding = await countTokens(
     handle,
     and(eq(tokens.offerId, offer.id), isNull(tokens.consumedAt), gt(tokens.exp, nowSec)),
   );
   if (outstanding >= limits.maxOutstandingPerOffer) {
-    throw jsonError("OUTSTANDING_LIMIT", "Too many unused checkouts are open on this offer; try again later", 429, {
-      retry_after_seconds: 300,
-    });
+    throw jsonError(
+      "OUTSTANDING_LIMIT",
+      "Too many unused checkouts are open on this offer; try again later",
+      429,
+      {
+        retry_after_seconds: 300,
+      },
+    );
   }
 
   if (row.maxPerPrincipalPerDay && principalHash !== "anon") {
-    const used = countPrincipalOrdersToday(handle, row.merchantId, principalHash, now);
+    const used = await countPrincipalOrdersToday(handle, row.merchantId, principalHash, now);
     if (used >= row.maxPerPrincipalPerDay) {
       throw jsonError("CAP_EXCEEDED", "max_per_principal_per_day exceeded", 409);
     }
   }
 
-  requireCheckoutWithinLimits(handle, row, now);
+  await requireCheckoutWithinLimits(handle, row, now);
 
   const issued = issueToken(
     {
@@ -179,29 +209,30 @@ export async function issueCheckout(
     handle.env.tokenSigningSecret,
   );
   const tokenId = newId("tok_");
-  handle.db
-    .insert(tokens)
-    .values({
-      tokenId,
-      offerId: offer.id,
-      agentId: args.agentId,
-      principalHash,
-      referrerAgentId: args.referrerAgentId ?? null,
-      exp: issued.payload.exp,
-      nonce: issued.payload.nce,
-      rawJws: issued.token,
-      consumedAt: null,
-      issuedBy: args.issuedBy ?? null,
-      createdAt: now.toISOString(),
-    })
-    .run();
+  await handle.db.insert(tokens).values({
+    tokenId,
+    offerId: offer.id,
+    agentId: args.agentId,
+    principalHash,
+    referrerAgentId: args.referrerAgentId ?? null,
+    exp: issued.payload.exp,
+    nonce: issued.payload.nce,
+    rawJws: issued.token,
+    consumedAt: null,
+    issuedBy: args.issuedBy ?? null,
+    createdAt: now.toISOString(),
+  });
 
   let discountCode: string | undefined;
   if (merchant.accessTokenEnc && offer.reward.type === "percent") {
     const code = oneTimeDiscountCode();
     const productGid = (offer.selector.ids ?? []).find((id) => /\/Product\//i.test(id)) ?? null;
     try {
-      const accessToken = decryptAccessToken(merchant.accessTokenEnc, handle.env.accessTokenEncryptionKey, handle.env.accessTokenEncryptionKeyPrevious);
+      const accessToken = decryptAccessToken(
+        merchant.accessTokenEnc,
+        handle.env.accessTokenEncryptionKey,
+        handle.env.accessTokenEncryptionKeyPrevious,
+      );
       const created = await createCheckoutDiscount({
         shop: merchant.shopDomain,
         accessToken,
@@ -213,13 +244,17 @@ export async function issueCheckout(
       });
       if (created.ok) {
         discountCode = code;
-        handle.db
+        await handle.db
           .update(tokens)
           .set({ discountCode: code, discountNodeId: created.nodeId })
-          .where(eq(tokens.tokenId, tokenId))
-          .run();
+          .where(eq(tokens.tokenId, tokenId));
       } else {
-        logJson({ level: "warn", msg: "discount_create_failed", offer_id: offer.id, error: created.error });
+        logJson({
+          level: "warn",
+          msg: "discount_create_failed",
+          offer_id: offer.id,
+          error: created.error,
+        });
       }
     } catch (err) {
       logJson({
@@ -250,43 +285,49 @@ export async function issueCheckout(
  * either by the email on the order or by the principal_ref the agent sent;
  * both are hashed the same way, so the two line up.
  */
-function countPrincipalOrdersToday(
+async function countPrincipalOrdersToday(
   handle: DbHandle,
   merchantId: string,
   principalHash: string,
   now: Date,
-): number {
-  const tokenIds = handle.db
-    .select({ tokenId: tokens.tokenId })
-    .from(tokens)
-    .where(eq(tokens.principalHash, principalHash))
-    .all()
-    .map((t) => t.tokenId);
+): Promise<number> {
+  const tokenIds = (
+    await handle.db
+      .select({ tokenId: tokens.tokenId })
+      .from(tokens)
+      .where(eq(tokens.principalHash, principalHash))
+  ).map((t) => t.tokenId);
   const who =
     tokenIds.length > 0
       ? or(eq(ordersExt.emailHash, principalHash), inArray(ordersExt.tokenId, tokenIds))
       : eq(ordersExt.emailHash, principalHash);
-  const row = handle.db
-    .select({ n: sql<number>`count(*)` })
-    .from(ordersExt)
-    .where(
-      and(
-        eq(ordersExt.merchantId, merchantId),
-        gte(ordersExt.paidAt, startOfUtcDay(now)),
-        inArray(ordersExt.status, ["pending_hold", "cleared"]),
-        who,
-      ),
-    )
-    .get();
+  const row = (
+    await handle.db
+      .select({ n: sql<number>`count(*)` })
+      .from(ordersExt)
+      .where(
+        and(
+          eq(ordersExt.merchantId, merchantId),
+          gte(ordersExt.paidAt, startOfUtcDay(now)),
+          inArray(ordersExt.status, ["pending_hold", "cleared"]),
+          who,
+        ),
+      )
+      .limit(1)
+  )[0];
   return Number(row?.n ?? 0);
 }
 
-export function findTokenRow(handle: DbHandle, rawToken: string) {
-  return handle.db.select().from(tokens).where(eq(tokens.rawJws, rawToken)).get();
+export async function findTokenRow(handle: DbHandle, rawToken: string) {
+  return (await handle.db.select().from(tokens).where(eq(tokens.rawJws, rawToken)).limit(1))[0];
 }
 
-export function conversionForToken(handle: DbHandle, rawToken: string, now = new Date()): Conversion {
-  const row = findTokenRow(handle, rawToken);
+export async function conversionForToken(
+  handle: DbHandle,
+  rawToken: string,
+  now = new Date(),
+): Promise<Conversion> {
+  const row = await findTokenRow(handle, rawToken);
   if (!row) {
     try {
       verifyWithRotation(rawToken, handle, now);
@@ -297,8 +338,10 @@ export function conversionForToken(handle: DbHandle, rawToken: string, now = new
     }
     throw jsonError("TOKEN_NOT_FOUND", "Unknown token", 404);
   }
-  const order = handle.db.select().from(ordersExt).where(eq(ordersExt.tokenId, row.tokenId)).get();
-  const { offer } = loadOffer(handle, row.offerId);
+  const order = (
+    await handle.db.select().from(ordersExt).where(eq(ordersExt.tokenId, row.tokenId)).limit(1)
+  )[0];
+  const { offer } = await loadOffer(handle, row.offerId);
   if (!order) {
     const expired = row.exp <= Math.floor(now.getTime() / 1000);
     return {
@@ -306,7 +349,7 @@ export function conversionForToken(handle: DbHandle, rawToken: string, now = new
       status: expired ? "expired" : "issued",
     };
   }
-  const pay = handle.db.select().from(payouts).where(eq(payouts.orderExtId, order.id)).all();
+  const pay = await handle.db.select().from(payouts).where(eq(payouts.orderExtId, order.id));
   const net = netTotal(order);
   const rewardAmount = computePayout({
     type: offer.reward.type,
@@ -336,7 +379,7 @@ export function conversionForToken(handle: DbHandle, rawToken: string, now = new
   };
 }
 
-export function recordPaidOrder(
+export async function recordPaidOrder(
   handle: DbHandle,
   args: {
     token: string;
@@ -355,7 +398,7 @@ export function recordPaidOrder(
     ignoreExpiry?: boolean;
     now?: Date;
   },
-): Conversion {
+): Promise<Conversion> {
   const now = args.now ?? new Date();
   try {
     verifyWithRotation(args.token, handle, now, { ignoreExpiry: args.ignoreExpiry });
@@ -366,10 +409,10 @@ export function recordPaidOrder(
     throw jsonError("INVALID_TOKEN", err instanceof Error ? err.message : "Invalid token", 400);
   }
 
-  const tokenRow = findTokenRow(handle, args.token);
+  const tokenRow = await findTokenRow(handle, args.token);
   if (!tokenRow) throw jsonError("TOKEN_NOT_FOUND", "Unknown token", 404);
 
-  const { offer, row, merchant } = loadOffer(handle, tokenRow.offerId);
+  const { offer, row, merchant } = await loadOffer(handle, tokenRow.offerId);
   if (args.expectedShop && args.expectedShop.toLowerCase() !== merchant.shopDomain.toLowerCase()) {
     throw jsonError("SHOP_MISMATCH", "Token belongs to a different shop", 409);
   }
@@ -380,11 +423,17 @@ export function recordPaidOrder(
     throw jsonError("OFFER_NOT_LIVE", "Offer is not live", 409);
   }
 
-  const orderEmailHash = args.email ? hashPrincipal(args.email, handle.env.principalHashSecret) : "anon";
+  const orderEmailHash = args.email
+    ? hashPrincipal(args.email, handle.env.principalHashSecret)
+    : "anon";
   const emailHash =
-    orderEmailHash !== "anon" ? orderEmailHash : tokenRow.principalHash !== "anon" ? tokenRow.principalHash : null;
+    orderEmailHash !== "anon"
+      ? orderEmailHash
+      : tokenRow.principalHash !== "anon"
+        ? tokenRow.principalHash
+        : null;
   if (row.maxPerPrincipalPerDay && emailHash) {
-    const used = countPrincipalOrdersToday(handle, merchant.id, emailHash, now);
+    const used = await countPrincipalOrdersToday(handle, merchant.id, emailHash, now);
     if (used >= row.maxPerPrincipalPerDay) {
       throw jsonError("CAP_EXCEEDED", "max_per_principal_per_day exceeded", 409);
     }
@@ -394,54 +443,44 @@ export function recordPaidOrder(
   // Consume the token and record the order together. The conditional update
   // plus the unique index on orders_ext.token_id mean a duplicate delivery can
   // never count the same checkout twice.
-  handle.sqlite.transaction(() => {
-    const consumed = handle.db
+  await handle.db.transaction(async (tx) => {
+    const consumed = await tx
       .update(tokens)
       .set({ consumedAt: now.toISOString() })
       .where(and(eq(tokens.tokenId, tokenRow.tokenId), isNull(tokens.consumedAt)))
-      .run();
-    if (consumed.changes !== 1) {
+      .returning({ tokenId: tokens.tokenId });
+    if (consumed.length !== 1) {
       throw jsonError("TOKEN_CONSUMED", "Token already converted", 409);
     }
     if (emailHash) {
-      const existing = handle.db
-        .select()
-        .from(principals)
-        .where(and(eq(principals.merchantId, merchant.id), eq(principals.emailHash, emailHash)))
-        .get();
-      if (!existing) {
-        handle.db
-          .insert(principals)
-          .values({
-            id: newId("prn_"),
-            merchantId: merchant.id,
-            emailHash,
-            shopifyCustomerId: null,
-            firstSeenAt: now.toISOString(),
-          })
-          .run();
-      }
+      await tx
+        .insert(principals)
+        .values({
+          id: newId("prn_"),
+          merchantId: merchant.id,
+          emailHash,
+          shopifyCustomerId: null,
+          firstSeenAt: now.toISOString(),
+        })
+        .onConflictDoNothing();
     }
-    handle.db
-      .insert(ordersExt)
-      .values({
-        id: newId("ord_"),
-        merchantId: merchant.id,
-        shopifyOrderId: args.shopifyOrderId ?? null,
-        tokenId: tokenRow.tokenId,
-        total: normalizeMoney(args.orderTotal),
-        orderTotal: args.grossTotal ? normalizeMoney(args.grossTotal) : null,
-        attributedLinesJson: args.attributedLines ? JSON.stringify(args.attributedLines) : null,
-        refundedTotal: "0.00",
-        currency: args.currency,
-        emailHash,
-        status: "pending_hold",
-        paidAt: now.toISOString(),
-        holdUntil,
-        clawedAt: null,
-      })
-      .run();
-  })();
+    await tx.insert(ordersExt).values({
+      id: newId("ord_"),
+      merchantId: merchant.id,
+      shopifyOrderId: args.shopifyOrderId ?? null,
+      tokenId: tokenRow.tokenId,
+      total: normalizeMoney(args.orderTotal),
+      orderTotal: args.grossTotal ? normalizeMoney(args.grossTotal) : null,
+      attributedLinesJson: args.attributedLines ? JSON.stringify(args.attributedLines) : null,
+      refundedTotal: "0.00",
+      currency: args.currency,
+      emailHash,
+      status: "pending_hold",
+      paidAt: now.toISOString(),
+      holdUntil,
+      clawedAt: null,
+    });
+  });
 
   return conversionForToken(handle, args.token, now);
 }
@@ -451,16 +490,22 @@ function netTotal(order: typeof ordersExt.$inferSelect): string {
   return fromCents(net > 0n ? net : 0n);
 }
 
-export function clearHold(handle: DbHandle, rawToken: string, now = new Date()): Conversion {
-  const tokenRow = findTokenRow(handle, rawToken);
+export async function clearHold(
+  handle: DbHandle,
+  rawToken: string,
+  now = new Date(),
+): Promise<Conversion> {
+  const tokenRow = await findTokenRow(handle, rawToken);
   if (!tokenRow) throw jsonError("TOKEN_NOT_FOUND", "Unknown token", 404);
-  const order = handle.db.select().from(ordersExt).where(eq(ordersExt.tokenId, tokenRow.tokenId)).get();
+  const order = (
+    await handle.db.select().from(ordersExt).where(eq(ordersExt.tokenId, tokenRow.tokenId)).limit(1)
+  )[0];
   if (!order) throw jsonError("ORDER_NOT_FOUND", "No paid order for token", 404);
   if (order.status === "cleared") return conversionForToken(handle, rawToken, now);
   if (order.status !== "pending_hold") {
     throw jsonError("INVALID_STATE", `Cannot clear order in status ${order.status}`, 409);
   }
-  const { offer } = loadOffer(handle, tokenRow.offerId);
+  const { offer } = await loadOffer(handle, tokenRow.offerId);
   const net = netTotal(order);
   const rewardAmount = computePayout({
     type: offer.reward.type,
@@ -474,46 +519,52 @@ export function clearHold(handle: DbHandle, rawToken: string, now = new Date()):
         orderTotal: net,
       })
     : "0.00";
-  handle.db.update(ordersExt).set({ status: "cleared" }).where(eq(ordersExt.id, order.id)).run();
-  handle.db
-    .insert(payouts)
-    .values({
-      id: newId("pay_"),
-      orderExtId: order.id,
-      party: "buyer",
-      agentId: null,
-      amount: rewardAmount,
-      currency: order.currency,
-      status: "stubbed",
-    })
-    .run();
-  handle.db
-    .insert(payouts)
-    .values({
-      id: newId("pay_"),
-      orderExtId: order.id,
-      party: "agent",
-      agentId: tokenRow.agentId,
-      amount: finderFeeAmount,
-      currency: order.currency,
-      status: "stubbed",
-    })
-    .run();
+  await handle.db.update(ordersExt).set({ status: "cleared" }).where(eq(ordersExt.id, order.id));
+  await handle.db.insert(payouts).values({
+    id: newId("pay_"),
+    orderExtId: order.id,
+    party: "buyer",
+    agentId: null,
+    amount: rewardAmount,
+    currency: order.currency,
+    status: "stubbed",
+  });
+  await handle.db.insert(payouts).values({
+    id: newId("pay_"),
+    orderExtId: order.id,
+    party: "agent",
+    agentId: tokenRow.agentId,
+    amount: finderFeeAmount,
+    currency: order.currency,
+    status: "stubbed",
+  });
   return conversionForToken(handle, rawToken, now);
 }
 
-export function findOrder(
+export async function findOrder(
   handle: DbHandle,
   args: { token?: string; shopifyOrderId?: string },
-): typeof ordersExt.$inferSelect | undefined {
+): Promise<typeof ordersExt.$inferSelect | undefined> {
   let order: typeof ordersExt.$inferSelect | undefined;
   if (args.shopifyOrderId) {
-    order = handle.db.select().from(ordersExt).where(eq(ordersExt.shopifyOrderId, args.shopifyOrderId)).get();
+    order = (
+      await handle.db
+        .select()
+        .from(ordersExt)
+        .where(eq(ordersExt.shopifyOrderId, args.shopifyOrderId))
+        .limit(1)
+    )[0];
   }
   if (!order && args.token) {
-    const tokenRow = findTokenRow(handle, args.token);
+    const tokenRow = await findTokenRow(handle, args.token);
     if (tokenRow) {
-      order = handle.db.select().from(ordersExt).where(eq(ordersExt.tokenId, tokenRow.tokenId)).get();
+      order = (
+        await handle.db
+          .select()
+          .from(ordersExt)
+          .where(eq(ordersExt.tokenId, tokenRow.tokenId))
+          .limit(1)
+      )[0];
     }
   }
   return order;
@@ -525,7 +576,7 @@ export function findOrder(
  * full refund during the hold claws the conversion back. Each Shopify refund
  * id is applied at most once.
  */
-export function applyRefund(
+export async function applyRefund(
   handle: DbHandle,
   args: {
     order: typeof ordersExt.$inferSelect;
@@ -535,25 +586,24 @@ export function applyRefund(
     refundId?: string | null;
     now?: Date;
   },
-): Conversion | { ignored: true } {
+): Promise<Conversion | { ignored: true }> {
   const now = args.now ?? new Date();
   const order = args.order;
-  const total = toCents(order.total);
-  const already = toCents(order.refundedTotal ?? "0.00");
-  const want = args.full ? total - already : (args.amountCents ?? 0n);
-  const delta = want < 0n ? 0n : want > total - already ? total - already : want;
-  const refundedTotal = fromCents(already + delta);
-  const fullyRefunded = already + delta >= total;
 
-  handle.sqlite.transaction(() => {
+  await handle.db.transaction(async (tx) => {
+    // Lock the order so concurrent refunds add up instead of overwriting.
+    const [locked] = await tx
+      .select()
+      .from(ordersExt)
+      .where(eq(ordersExt.id, order.id))
+      .for("update");
+    if (!locked) return;
+    const total = toCents(locked.total);
+    const already = toCents(locked.refundedTotal ?? "0.00");
+    const want = args.full ? total - already : (args.amountCents ?? 0n);
+    const delta = want < 0n ? 0n : want > total - already ? total - already : want;
     if (args.refundId) {
-      const dup = handle.db
-        .select()
-        .from(orderRefunds)
-        .where(and(eq(orderRefunds.orderExtId, order.id), eq(orderRefunds.shopifyRefundId, args.refundId)))
-        .get();
-      if (dup) return;
-      handle.db
+      const inserted = await tx
         .insert(orderRefunds)
         .values({
           id: newId("rfd_"),
@@ -562,36 +612,42 @@ export function applyRefund(
           amount: fromCents(delta),
           createdAt: now.toISOString(),
         })
-        .run();
+        .onConflictDoNothing()
+        .returning({ id: orderRefunds.id });
+      if (inserted.length === 0) return; // this refund was already applied
     }
-    const clawback = fullyRefunded && order.status === "pending_hold";
-    handle.db
+    const clawback = already + delta >= total && locked.status === "pending_hold";
+    await tx
       .update(ordersExt)
       .set({
-        refundedTotal,
+        refundedTotal: fromCents(already + delta),
         ...(clawback ? { status: "clawed_back", clawedAt: now.toISOString() } : {}),
       })
-      .where(eq(ordersExt.id, order.id))
-      .run();
+      .where(eq(ordersExt.id, order.id));
     if (clawback) {
-      handle.db
+      await tx
         .update(payouts)
         .set({ status: "failed" })
-        .where(and(eq(payouts.orderExtId, order.id), inArray(payouts.status, ["pending", "ready"])))
-        .run();
+        .where(
+          and(eq(payouts.orderExtId, order.id), inArray(payouts.status, ["pending", "ready"])),
+        );
     }
-  })();
+  });
 
-  const tokenRow = handle.db.select().from(tokens).where(eq(tokens.tokenId, order.tokenId)).get();
+  const tokenRow = (
+    await handle.db.select().from(tokens).where(eq(tokens.tokenId, order.tokenId)).limit(1)
+  )[0];
   if (!tokenRow) return { ignored: true };
   return conversionForToken(handle, tokenRow.rawJws, now);
 }
 
-export function lookupAgentByKey(handle: DbHandle, apiKey: string) {
+export async function lookupAgentByKey(handle: DbHandle, apiKey: string) {
   const digest = hashApiKey(apiKey);
-  return handle.db
-    .select()
-    .from(agents)
-    .where(and(eq(agents.apiKeyHash, digest), eq(agents.status, "active")))
-    .get();
+  return (
+    await handle.db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.apiKeyHash, digest), eq(agents.status, "active")))
+      .limit(1)
+  )[0];
 }

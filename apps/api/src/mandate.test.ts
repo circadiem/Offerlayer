@@ -1,8 +1,5 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { closeDatabase, loadEnv, openDatabase, seedDatabase, type DbHandle } from "@offerlayer/db";
+import { closeDatabase, loadEnv, openTestDatabase, seedDatabase, type DbHandle } from "@offerlayer/db";
 import { SELLER_TOOL_DEFS, SELLER_TOOL_NAMES } from "../../mcp/src/index.ts";
 import { createApp } from "./app.ts";
 
@@ -15,11 +12,10 @@ describe("offerlayer v0.2 mandates", () => {
   let demoKey: string;
   let sellerKey: string;
 
-  beforeEach(() => {
-    const dir = mkdtempSync(join(tmpdir(), "ol-man-"));
-    const env = loadEnv({ DATABASE_URL: `file:${join(dir, "t.db")}` });
-    handle = openDatabase(env);
-    const keys = seedDatabase(handle);
+  beforeEach(async () => {
+    const env = loadEnv({ DATABASE_URL: "memory:" });
+    handle = await openTestDatabase(env);
+    const keys = await seedDatabase(handle);
     demoKey = keys.demoKey;
     sellerKey = keys.sellerAgentKey;
     app = createApp(handle);
@@ -232,7 +228,7 @@ describe("offerlayer v0.2 mandates", () => {
       headers: auth(),
       body: JSON.stringify({ human_confirmed: true }),
     });
-    handle.sqlite.prepare("UPDATE mandates SET expires_at = ? WHERE id = ?").run("2000-01-01T00:00:00.000Z", proposed.body.id);
+    await handle.raw("UPDATE mandates SET expires_at = $1 WHERE id = $2", ["2000-01-01T00:00:00.000Z", proposed.body.id]);
     const live = await json("/v1/seller/offers", {
       method: "POST",
       headers: auth(),
@@ -246,11 +242,11 @@ describe("offerlayer v0.2 mandates", () => {
     });
     expect(live.res.status).toBe(403);
     expect(live.body.error.code).toBe("MANDATE_REQUIRED");
-    const row = handle.sqlite.prepare("SELECT status FROM mandates WHERE id = ?").get(proposed.body.id) as { status: string };
+    const row = (await handle.raw("SELECT status FROM mandates WHERE id = $1", [proposed.body.id]))[0] as { status: string };
     expect(row.status).toBe("expired");
   });
 
-  it("MCP mandate tools and activate_mandate description", () => {
+  it("MCP mandate tools and activate_mandate description", async () => {
     expect(SELLER_TOOL_NAMES).toEqual(
       expect.arrayContaining(["propose_mandate", "activate_mandate", "list_mandates", "revoke_mandate"]),
     );

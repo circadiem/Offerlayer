@@ -2,7 +2,7 @@ import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { eq } from "drizzle-orm";
 import { hashApiKey } from "./crypto.ts";
-import { closeDatabase, openDatabase } from "./client.ts";
+import { closeDatabase, openDatabase, type DbHandle } from "./client.ts";
 import { loadEnv } from "./env.ts";
 import { agents, merchants, offers, shopGrants } from "./schema.ts";
 
@@ -58,16 +58,16 @@ export const SEED_OFFER = {
   disclosure: SEED_DISCLOSURE,
 };
 
-export function seedDatabase(handle = openDatabase()): {
+export async function seedDatabase(handle: DbHandle): Promise<{
   demoAgentKey: string;
   museAgentKey: string;
   sellerAgentKey: string;
   demoKey: string;
-} {
+}> {
   const now = new Date().toISOString();
   const { db, env } = handle;
 
-  db.insert(merchants)
+  await db.insert(merchants)
     .values({
       id: SEED_MERCHANT_ID,
       shopDomain: SEED_OFFER.merchant.shop_domain,
@@ -85,9 +85,9 @@ export function seedDatabase(handle = openDatabase()): {
         website: SEED_OFFER.merchant.website,
       },
     })
-    .run();
+    ;
 
-  db.insert(offers)
+  await db.insert(offers)
     .values({
       id: SEED_OFFER_ID,
       merchantId: SEED_MERCHANT_ID,
@@ -131,9 +131,9 @@ export function seedDatabase(handle = openDatabase()): {
         updatedAt: now,
       },
     })
-    .run();
+    ;
 
-  for (const row of db.select().from(offers).all()) {
+  for (const row of (await db.select().from(offers))) {
     if (!row.disclosure?.includes("finder fee")) continue;
     const disclosure =
       row.id === SEED_OFFER_ID
@@ -142,18 +142,18 @@ export function seedDatabase(handle = openDatabase()): {
             / ?The presenting agent may earn a 2% finder fee on the paid total\./,
             "",
           );
-    db.update(offers).set({ disclosure, updatedAt: now }).where(eq(offers.id, row.id)).run();
+    await db.update(offers).set({ disclosure, updatedAt: now }).where(eq(offers.id, row.id));
   }
 
-  const upsertAgent = (id: string, name: string, apiKeyHash: string, role: "shopper" | "seller") => {
-    const existing = db.select().from(agents).where(eq(agents.id, id)).get();
+  const upsertAgent = async (id: string, name: string, apiKeyHash: string, role: "shopper" | "seller") => {
+    const existing = (await db.select().from(agents).where(eq(agents.id, id)).limit(1))[0];
     if (existing) {
-      db.update(agents)
+      await db.update(agents)
         .set({ apiKeyHash, name, status: "active", role })
         .where(eq(agents.id, id))
-        .run();
+        ;
     } else {
-      db.insert(agents)
+      await db.insert(agents)
         .values({
           id,
           name,
@@ -163,27 +163,27 @@ export function seedDatabase(handle = openDatabase()): {
           role,
           createdAt: now,
         })
-        .run();
+        ;
     }
   };
 
-  upsertAgent(SEED_AGENT_DEMO, "Demo Agent", hashApiKey(env.demoAgentKey), "shopper");
-  upsertAgent(SEED_AGENT_MUSE, "Muse Demo", hashApiKey(env.museAgentKey), "shopper");
-  upsertAgent(SEED_AGENT_SELLER, "Demo Seller", hashApiKey(env.sellerAgentKey), "seller");
+  await upsertAgent(SEED_AGENT_DEMO, "Demo Agent", hashApiKey(env.demoAgentKey), "shopper");
+  await upsertAgent(SEED_AGENT_MUSE, "Muse Demo", hashApiKey(env.museAgentKey), "shopper");
+  await upsertAgent(SEED_AGENT_SELLER, "Demo Seller", hashApiKey(env.sellerAgentKey), "seller");
 
-  const grantExisting = db
+  const grantExisting = (await db
     .select()
     .from(shopGrants)
     .where(eq(shopGrants.merchantId, SEED_MERCHANT_ID))
-    .all()
+    )
     .find((g) => g.sellerAgentId === SEED_AGENT_SELLER);
   if (grantExisting) {
-    db.update(shopGrants)
+    await db.update(shopGrants)
       .set({ status: "active" })
       .where(eq(shopGrants.id, grantExisting.id))
-      .run();
+      ;
   } else {
-    db.insert(shopGrants)
+    await db.insert(shopGrants)
       .values({
         id: "grn_demo_towels_seller",
         merchantId: SEED_MERCHANT_ID,
@@ -191,7 +191,7 @@ export function seedDatabase(handle = openDatabase()): {
         status: "active",
         createdAt: now,
       })
-      .run();
+      ;
   }
 
   return {
@@ -202,18 +202,18 @@ export function seedDatabase(handle = openDatabase()): {
   };
 }
 
-function main(): void {
+async function main(): Promise<void> {
   // `pnpm seed` is a demo affordance (public demo keys). Production deploys
   // seed through their own entrypoint with real secrets, never this CLI.
   process.env.OFFERLAYER_DEMO ??= "1";
   const env = loadEnv();
-  const handle = openDatabase(env);
-  const keys = seedDatabase(handle);
+  const handle = await openDatabase(env);
+  const keys = await seedDatabase(handle);
   process.stdout.write(
     `${JSON.stringify(
       {
         ok: true,
-        database: handle.path,
+        database: handle.kind,
         merchant: SEED_OFFER.merchant.shop_domain,
         offer: SEED_OFFER_ID,
         agents: {
@@ -228,10 +228,10 @@ function main(): void {
       2,
     )}\n`,
   );
-  closeDatabase(handle);
+  await closeDatabase(handle);
 }
 
 const entry = process.argv[1];
 if (entry && import.meta.url === pathToFileURL(resolve(entry)).href) {
-  main();
+  void main();
 }

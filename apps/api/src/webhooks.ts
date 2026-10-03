@@ -184,7 +184,7 @@ export type WebhookResult = {
  * non-2xx would make Shopify retry for days and eventually drop the
  * subscription. Unexpected errors still return 5xx so Shopify retries.
  */
-export function handleShopifyWebhook(
+export async function handleShopifyWebhook(
   handle: DbHandle,
   args: {
     topic: string;
@@ -193,7 +193,7 @@ export function handleShopifyWebhook(
     shopDomain?: string | null;
     webhookId?: string | null;
   },
-): WebhookResult {
+): Promise<WebhookResult> {
   if (!verifyShopifyHmac(args.rawBody, args.hmac, handle.env.shopifyApiSecret)) {
     throw jsonError("HMAC_INVALID", "Shopify HMAC verification failed", 401);
   }
@@ -208,13 +208,13 @@ export function handleShopifyWebhook(
   const webhookId = args.webhookId?.trim() || null;
 
   if (webhookId) {
-    const seen = handle.db.select().from(webhookEvents).where(eq(webhookEvents.webhookId, webhookId)).get();
+    const seen = (await handle.db.select().from(webhookEvents).where(eq(webhookEvents.webhookId, webhookId)).limit(1))[0];
     if (seen) return { ...(JSON.parse(seen.resultJson) as WebhookResult), duplicate: true };
   }
 
   let result: WebhookResult;
   try {
-    result = processWebhook(handle, topic, payload, shop);
+    result = await processWebhook(handle, topic, payload, shop);
   } catch (err) {
     if (!(err instanceof ApiError) || err.status >= 500) throw err;
     logJson({
@@ -229,7 +229,7 @@ export function handleShopifyWebhook(
   }
 
   if (webhookId) {
-    handle.db
+    await handle.db
       .insert(webhookEvents)
       .values({
         webhookId,
@@ -239,12 +239,12 @@ export function handleShopifyWebhook(
         receivedAt: new Date().toISOString(),
       })
       .onConflictDoNothing()
-      .run();
+      ;
   }
   return result;
 }
 
-function processWebhook(handle: DbHandle, topic: string, payload: unknown, shop: string | null): WebhookResult {
+async function processWebhook(handle: DbHandle, topic: string, payload: unknown, shop: string | null): Promise<WebhookResult> {
   if (topic === "orders/paid") {
     const token = extractOrderToken(payload);
     if (!token) {
@@ -262,16 +262,16 @@ function processWebhook(handle: DbHandle, topic: string, payload: unknown, shop:
     if (!shop) throw jsonError("SHOP_DOMAIN_MISSING", "X-Shopify-Shop-Domain header is required", 400);
     const money = orderMoney(payload);
     let attributed: { total: string; lines: AttributedLine[] } | null = null;
-    const tokenRow = findTokenRow(handle, token);
+    const tokenRow = await findTokenRow(handle, token);
     if (tokenRow) {
-      const { row } = loadOffer(handle, tokenRow.offerId);
+      const { row } = await loadOffer(handle, tokenRow.offerId);
       attributed = attributeOrder(payload, {
         selectorType: row.selectorType,
         selectorIds: JSON.parse(row.selectorIdsJson) as string[],
         discountCode: tokenRow.discountCode,
       });
     }
-    const conversion = recordPaidOrder(handle, {
+    const conversion = await recordPaidOrder(handle, {
       token,
       orderTotal: attributed?.total ?? money.total,
       grossTotal: money.total,
@@ -287,17 +287,17 @@ function processWebhook(handle: DbHandle, topic: string, payload: unknown, shop:
 
   if (topic === "orders/cancelled" || topic === "refunds/create") {
     const token = extractOrderToken(payload);
-    const order = findOrder(handle, {
+    const order = await findOrder(handle, {
       token: token ?? undefined,
       shopifyOrderId: shopifyOrderId(payload) ?? undefined,
     });
     if (!order) return { ok: true, ignored: true };
-    const merchant = handle.db.select().from(merchants).where(eq(merchants.id, order.merchantId)).get();
+    const merchant = (await handle.db.select().from(merchants).where(eq(merchants.id, order.merchantId)).limit(1))[0];
     if (!shop || !merchant || merchant.shopDomain.toLowerCase() !== shop) {
       throw jsonError("SHOP_MISMATCH", "Order belongs to a different shop", 409);
     }
     if (topic === "orders/cancelled") {
-      const result = applyRefund(handle, { order, full: true, refundId: "cancel" });
+      const result = await applyRefund(handle, { order, full: true, refundId: "cancel" });
       return "ignored" in result ? { ok: true, ignored: true } : { ok: true, conversion: result };
     }
     const lines = order.attributedLinesJson ? (JSON.parse(order.attributedLinesJson) as AttributedLine[]) : null;
@@ -312,7 +312,7 @@ function processWebhook(handle: DbHandle, topic: string, payload: unknown, shop:
     // fixtures) is treated as a full refund.
     const unspecified =
       !Array.isArray(refund?.refund_line_items) && !Array.isArray(refund?.transactions);
-    const result = applyRefund(handle, unspecified ? { order, full: true, refundId } : { order, amountCents, refundId });
+    const result = await applyRefund(handle, unspecified ? { order, full: true, refundId } : { order, amountCents, refundId });
     return "ignored" in result ? { ok: true, ignored: true } : { ok: true, conversion: result };
   }
   return { ok: true, ignored: true };

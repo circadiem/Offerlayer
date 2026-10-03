@@ -31,6 +31,13 @@
   },
   "include": [
     "src",
-    "server"
+    "server",
+    "apps",
+    "packages",
+    "scripts/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "**/node_modules"
   ]
 }

@@ -128,6 +128,6 @@ OpenAPI: /openapi.yaml
 
 ## Stack
 
-Node 22, TypeScript, ESM, pnpm workspaces, Hono, SQLite via Drizzle (`better-sqlite3`), Zod, Vitest, `@modelcontextprotocol/sdk`. Money is always decimal strings. Every public offer includes `disclosure`.
+Node 22, TypeScript, ESM, pnpm workspaces, Hono, Postgres via Drizzle (Supabase in production, PGlite in tests and demos; see `docs/DATABASE.md`), Zod, Vitest, `@modelcontextprotocol/sdk`. Money is always decimal strings. Every public offer includes `disclosure`.
 
 See `GROK_BUILD.md`, `GROK_BUILD_V01.md`, `GROK_BUILD_V02.md`, `docs/ACCEPTANCE.md`, `docs/ACCEPTANCE_V01.md`, and `docs/ACCEPTANCE_V02.md`.

@@ -5,8 +5,8 @@ import { logJson } from "./logger.ts";
 import { VERSION } from "./version.ts";
 
 const env = loadEnv();
-const handle = openDatabase(env);
-seedDatabase(handle);
+const handle = await openDatabase(env);
+await seedDatabase(handle);
 const app = createApp(handle);
 
 serve({ fetch: app.fetch, port: env.port, hostname: "0.0.0.0" }, (info) => {

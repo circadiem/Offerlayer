@@ -168,7 +168,7 @@ export function registerShopifyAuthRoutes(app: Hono, handle: DbHandle) {
       clientSecret: handle.env.shopifyApiSecret,
     });
     const info = await fetchShopInfo({ shop, accessToken: token.access_token });
-    const connected = completeLink(handle, sellerLink, shop, {
+    const connected = await completeLink(handle, sellerLink, shop, {
       shopifyShopId: info.id ? `gid://shopify/Shop/${info.id}` : null,
       accessToken: token.access_token,
       name: info.name,
@@ -222,7 +222,7 @@ export function registerShopifyAuthRoutes(app: Hono, handle: DbHandle) {
       shop = shopRaw;
     }
     try {
-      completeLink(handle, sellerLink, shop);
+      await completeLink(handle, sellerLink, shop);
     } catch {
       // still show the page
     }
