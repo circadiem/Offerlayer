@@ -1,9 +1,14 @@
 import { createHmac } from "node:crypto";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { closeDatabase, decryptSecret, encryptSecret, loadEnv, openDatabase, seedDatabase } from "@offerlayer/db";
+import {
+  closeDatabase,
+  decryptSecret,
+  encryptSecret,
+  loadEnv,
+  openTestDatabase,
+  seedDatabase,
+  type DbHandle,
+} from "@offerlayer/db";
 import { createApp } from "./app.ts";
 import { shopifyAdmin, signOAuthQuery, trackedCartUrl } from "./shopify-admin.ts";
 
@@ -12,7 +17,7 @@ const REAL_PRODUCT = "gid://shopify/Product/9001001";
 const REAL_VARIANT = "gid://shopify/ProductVariant/9002001";
 
 describe("real Shopify OAuth + catalog", () => {
-  let handle: ReturnType<typeof openDatabase>;
+  let handle: DbHandle;
   let app: ReturnType<typeof createApp>;
   let sellerKey: string;
   let demoKey: string;
@@ -20,16 +25,15 @@ describe("real Shopify OAuth + catalog", () => {
   let shopSecret: string;
   const originalFetch = shopifyAdmin.fetch;
 
-  beforeEach(() => {
-    const dir = mkdtempSync(join(tmpdir(), "ol-oauth-"));
+  beforeEach(async () => {
     const env = loadEnv({
-      DATABASE_URL: `file:${join(dir, "t.db")}`,
+      DATABASE_URL: "memory:",
       SHOPIFY_API_KEY: "shpkey_test",
       SHOPIFY_API_SECRET: "shopify_oauth_secret_v0_test",
       APP_URL: "https://offerlayer.grok.me",
     });
-    handle = openDatabase(env);
-    const keys = seedDatabase(handle);
+    handle = await openTestDatabase(env);
+    const keys = await seedDatabase(handle);
     sellerKey = keys.sellerAgentKey;
     demoKey = keys.demoKey;
     agentKey = keys.demoAgentKey;
@@ -101,7 +105,7 @@ describe("real Shopify OAuth + catalog", () => {
     return { "content-type": "application/json", authorization: `Bearer ${sellerKey}`, ...extra };
   }
 
-  it("encrypts Shopify access tokens at rest", () => {
+  it("encrypts Shopify access tokens at rest", async () => {
     const blob = encryptSecret("shpat_live_test", handle.env.accessTokenEncryptionKey);
     expect(blob.startsWith("enc1.")).toBe(true);
     expect(blob).not.toContain("shpat_live_test");
@@ -128,10 +132,9 @@ describe("real Shopify OAuth + catalog", () => {
   });
 
   it("GET /auth/login without Partners key stays the human HTML page", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ol-oauth-nop-"));
-    const env = loadEnv({ DATABASE_URL: `file:${join(dir, "t.db")}`, SHOPIFY_API_KEY: "" });
-    const h = openDatabase(env);
-    seedDatabase(h);
+    const env = loadEnv({ DATABASE_URL: "memory:", SHOPIFY_API_KEY: "" });
+    const h = await openTestDatabase(env);
+    await seedDatabase(h);
     const naked = createApp(h);
     const res = await naked.request("/auth/login?seller_link=lnk_test&shop=demo-towels.myshopify.com");
     expect(res.status).toBe(200);
@@ -170,9 +173,7 @@ describe("real Shopify OAuth + catalog", () => {
     );
     expect(bound?.oauth_bound).toBe(true);
 
-    const row = handle.sqlite
-      .prepare("SELECT access_token_enc, shopify_shop_id FROM merchants WHERE shop_domain = ?")
-      .get(REAL_SHOP) as { access_token_enc: string; shopify_shop_id: string };
+    const row = (await handle.raw("SELECT access_token_enc, shopify_shop_id FROM merchants WHERE shop_domain = $1", [REAL_SHOP]))[0] as { access_token_enc: string; shopify_shop_id: string };
     expect(row.access_token_enc.startsWith("enc1.")).toBe(true);
     expect(row.access_token_enc).not.toContain("shpat_live_test");
     expect(row.shopify_shop_id).toContain("4242");
@@ -286,9 +287,7 @@ describe("real Shopify OAuth + catalog", () => {
         ],
       }),
     });
-    handle.sqlite
-      .prepare("UPDATE merchants SET access_token_enc = ? WHERE shop_domain = ?")
-      .run(encryptSecret("shpat_live_test", handle.env.accessTokenEncryptionKey), REAL_SHOP);
+    await handle.raw("UPDATE merchants SET access_token_enc = $1 WHERE shop_domain = $2", [encryptSecret("shpat_live_test", handle.env.accessTokenEncryptionKey), REAL_SHOP]);
     const shops = await json("/v1/seller/shops", { headers: sellerHeaders() });
     const merch = (shops.body.shops as { merchant_id: string; shop_domain: string }[]).find(
       (s) => s.shop_domain === REAL_SHOP,

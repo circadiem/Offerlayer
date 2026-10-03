@@ -6,6 +6,8 @@ export default defineConfig({
       // Tests exercise the public demo keys; they must never run against
       // production-mode env validation.
       OFFERLAYER_DEMO: "1",
+      // Embedded in-memory Postgres; tests share one instance per file.
+      DATABASE_URL: "memory:",
     },
     include: [
       "packages/*/src/**/*.test.ts",

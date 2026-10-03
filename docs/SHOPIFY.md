@@ -23,7 +23,7 @@ SHOPIFY_API_KEY=...
 SHOPIFY_API_SECRET=...          # also the webhook signing secret
 APP_URL=https://www.offerlayer.io
 ACCESS_TOKEN_ENCRYPTION_KEY=... # 32+ chars; encrypts access tokens (docs/SECRETS.md)
-DATABASE_URL=postgres://...     # durable (Neon). Do not use a disposable sqlite file on the host.
+DATABASE_URL=postgres://...     # Supabase transaction pooler; see docs/DATABASE.md
 ```
 
 `SHOPIFY_APP_URL` and `PUBLIC_BASE_URL` are aliases; `APP_URL` wins over localhost leftovers.

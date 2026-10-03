@@ -83,15 +83,15 @@ function linkUrls(origin: string, linkId: string, shop: string | null, demoMode:
   };
 }
 
-function findMerchant(handle: DbHandle, idOrDomain: string) {
-  const byId = handle.db.select().from(merchants).where(eq(merchants.id, idOrDomain)).get();
+async function findMerchant(handle: DbHandle, idOrDomain: string) {
+  const byId = (await handle.db.select().from(merchants).where(eq(merchants.id, idOrDomain)).limit(1))[0];
   if (byId) return byId;
   const shop = tryNormalizeShop(idOrDomain) ?? idOrDomain;
-  return handle.db.select().from(merchants).where(eq(merchants.shopDomain, shop)).get();
+  return (await handle.db.select().from(merchants).where(eq(merchants.shopDomain, shop)).limit(1))[0];
 }
 
-function activeGrant(handle: DbHandle, sellerAgentId: string, merchantId: string) {
-  return handle.db
+async function activeGrant(handle: DbHandle, sellerAgentId: string, merchantId: string) {
+  return (await handle.db
     .select()
     .from(shopGrants)
     .where(
@@ -101,16 +101,16 @@ function activeGrant(handle: DbHandle, sellerAgentId: string, merchantId: string
         eq(shopGrants.status, "active"),
       ),
     )
-    .get();
+    .limit(1))[0];
 }
 
-function requireGrant(handle: DbHandle, sellerAgentId: string, merchantId: string) {
-  const grant = activeGrant(handle, sellerAgentId, merchantId);
+async function requireGrant(handle: DbHandle, sellerAgentId: string, merchantId: string) {
+  const grant = await activeGrant(handle, sellerAgentId, merchantId);
   if (!grant) throw jsonError("FORBIDDEN", "Seller does not hold a grant on this shop", 403);
   return grant;
 }
 
-function upsertMerchant(
+async function upsertMerchant(
   handle: DbHandle,
   shop: string,
   extra: {
@@ -121,10 +121,10 @@ function upsertMerchant(
   } = {},
 ) {
   const now = new Date().toISOString();
-  let merchant = handle.db.select().from(merchants).where(eq(merchants.shopDomain, shop)).get();
+  let merchant = (await handle.db.select().from(merchants).where(eq(merchants.shopDomain, shop)).limit(1))[0];
   if (!merchant) {
     const id = newId("mer_");
-    handle.db
+    await handle.db
       .insert(merchants)
       .values({
         id,
@@ -136,8 +136,8 @@ function upsertMerchant(
         catalogJson: extra.catalogJson ?? null,
         createdAt: now,
       })
-      .run();
-    merchant = handle.db.select().from(merchants).where(eq(merchants.id, id)).get();
+      ;
+    merchant = (await handle.db.select().from(merchants).where(eq(merchants.id, id)).limit(1))[0];
   } else {
     const patch: Record<string, string | null> = {
       ...(extra.name ? { name: extra.name } : {}),
@@ -146,28 +146,28 @@ function upsertMerchant(
       ...(extra.catalogJson !== undefined ? { catalogJson: extra.catalogJson } : {}),
     };
     if (Object.keys(patch).length > 0) {
-      handle.db.update(merchants).set(patch).where(eq(merchants.id, merchant.id)).run();
-      merchant = handle.db.select().from(merchants).where(eq(merchants.id, merchant.id)).get();
+      await handle.db.update(merchants).set(patch).where(eq(merchants.id, merchant.id));
+      merchant = (await handle.db.select().from(merchants).where(eq(merchants.id, merchant.id)).limit(1))[0];
     }
   }
   if (!merchant) throw jsonError("MERCHANT_NOT_FOUND", "Failed to upsert merchant", 500);
   return merchant;
 }
 
-function ensureGrant(handle: DbHandle, merchantId: string, sellerAgentId: string) {
-  const existing = handle.db
+async function ensureGrant(handle: DbHandle, merchantId: string, sellerAgentId: string) {
+  const existing = (await handle.db
     .select()
     .from(shopGrants)
     .where(and(eq(shopGrants.merchantId, merchantId), eq(shopGrants.sellerAgentId, sellerAgentId)))
-    .get();
+    .limit(1))[0];
   if (existing) {
     if (existing.status !== "active") {
-      handle.db.update(shopGrants).set({ status: "active" }).where(eq(shopGrants.id, existing.id)).run();
+      await handle.db.update(shopGrants).set({ status: "active" }).where(eq(shopGrants.id, existing.id));
     }
     return existing.id;
   }
   const id = newId("grn_");
-  handle.db
+  await handle.db
     .insert(shopGrants)
     .values({
       id,
@@ -176,11 +176,11 @@ function ensureGrant(handle: DbHandle, merchantId: string, sellerAgentId: string
       status: "active",
       createdAt: new Date().toISOString(),
     })
-    .run();
+    ;
   return id;
 }
 
-export function completeLink(
+export async function completeLink(
   handle: DbHandle,
   linkId: string,
   shopRaw: string,
@@ -191,21 +191,21 @@ export function completeLink(
     catalog?: Omit<CatalogProduct, "checkout_template">[] | null;
   } = {},
 ) {
-  const link = handle.db.select().from(sellerLinks).where(eq(sellerLinks.id, linkId)).get();
+  const link = (await handle.db.select().from(sellerLinks).where(eq(sellerLinks.id, linkId)).limit(1))[0];
   if (!link) throw jsonError("LINK_NOT_FOUND", "Seller link not found", 404);
   const shop = tryNormalizeShop(shopRaw) ?? shopRaw;
   const accessTokenEnc = extra.accessToken
     ? encryptAccessToken(extra.accessToken, handle.env.accessTokenEncryptionKey)
     : undefined;
   const catalogJson = extra.catalog ? JSON.stringify(extra.catalog) : undefined;
-  const merchant = upsertMerchant(handle, shop, {
+  const merchant = await upsertMerchant(handle, shop, {
     name: extra.name,
     shopifyShopId: extra.shopifyShopId,
     accessTokenEnc,
     catalogJson,
   });
-  ensureGrant(handle, merchant.id, link.sellerAgentId);
-  handle.db
+  await ensureGrant(handle, merchant.id, link.sellerAgentId);
+  await handle.db
     .update(sellerLinks)
     .set({
       status: "connected",
@@ -213,8 +213,8 @@ export function completeLink(
       merchantId: merchant.id,
     })
     .where(eq(sellerLinks.id, link.id))
-    .run();
-  const bound = handle.db.select().from(merchants).where(eq(merchants.id, merchant.id)).get();
+    ;
+  const bound = (await handle.db.select().from(merchants).where(eq(merchants.id, merchant.id)).limit(1))[0];
   return {
     status: "connected" as const,
     pending_link_id: link.id,
@@ -245,10 +245,10 @@ function checkoutTemplateFor(shop: string, ids: string[] | undefined, explicit?:
   return trackedCartUrl(shop, cartId);
 }
 
-function toSellerOffer(handle: DbHandle, offerId: string) {
-  const row = handle.db.select().from(offers).where(eq(offers.id, offerId)).get();
+async function toSellerOffer(handle: DbHandle, offerId: string) {
+  const row = (await handle.db.select().from(offers).where(eq(offers.id, offerId)).limit(1))[0];
   if (!row) throw jsonError("OFFER_NOT_FOUND", "Offer not found", 404);
-  const merchant = handle.db.select().from(merchants).where(eq(merchants.id, row.merchantId)).get();
+  const merchant = (await handle.db.select().from(merchants).where(eq(merchants.id, row.merchantId)).limit(1))[0];
   if (!merchant) throw jsonError("MERCHANT_NOT_FOUND", "Merchant missing for offer", 500);
   return { ...rowToOffer(row, merchant), mandate_id: row.mandateId };
 }
@@ -281,7 +281,7 @@ export function registerSellerRoutes(app: Hono, handle: DbHandle, auth: AuthFns)
     const origin = requestPublicOrigin(c.req, handle.env);
     const urls = linkUrls(origin, id, shop, handle.env.demoMode);
     const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
-    handle.db
+    await handle.db
       .insert(sellerLinks)
       .values({
         id,
@@ -294,7 +294,7 @@ export function registerSellerRoutes(app: Hono, handle: DbHandle, auth: AuthFns)
         merchantId: null,
         createdAt: now.toISOString(),
       })
-      .run();
+      ;
     return c.json(
       {
         pending_link_id: id,
@@ -312,7 +312,7 @@ export function registerSellerRoutes(app: Hono, handle: DbHandle, auth: AuthFns)
   app.get("/v1/seller/links/:id", async (c) => {
     const seller = await auth.requireSeller(c);
     const id = c.req.param("id");
-    const link = handle.db.select().from(sellerLinks).where(eq(sellerLinks.id, id)).get();
+    const link = (await handle.db.select().from(sellerLinks).where(eq(sellerLinks.id, id)).limit(1))[0];
     if (!link || link.sellerAgentId !== seller.id) {
       throw jsonError("LINK_NOT_FOUND", "Seller link not found", 404);
     }
@@ -334,7 +334,7 @@ export function registerSellerRoutes(app: Hono, handle: DbHandle, auth: AuthFns)
     const actor = await auth.requireSellerOrDemoOrInternal(c);
     const id = c.req.param("id");
     const body = sellerCompleteLinkSchema.parse(await c.req.json());
-    const link = handle.db.select().from(sellerLinks).where(eq(sellerLinks.id, id)).get();
+    const link = (await handle.db.select().from(sellerLinks).where(eq(sellerLinks.id, id)).limit(1))[0];
     if (!link) throw jsonError("LINK_NOT_FOUND", "Seller link not found", 404);
     // Outside demo mode a seller key cannot bind a shop by itself: that
     // would let any seller claim any shop domain without the merchant's
@@ -346,19 +346,19 @@ export function registerSellerRoutes(app: Hono, handle: DbHandle, auth: AuthFns)
     if (actor.role === "seller" && actor.id !== link.sellerAgentId) {
       throw jsonError("FORBIDDEN", "Only the creating seller can complete this link", 403);
     }
-    return c.json(completeLink(handle, id, body.shop_domain));
+    return c.json(await completeLink(handle, id, body.shop_domain));
   });
 
   app.get("/v1/seller/shops", async (c) => {
     const seller = await auth.requireSeller(c);
-    const grants = handle.db
+    const grants = (await handle.db
       .select()
       .from(shopGrants)
       .where(and(eq(shopGrants.sellerAgentId, seller.id), eq(shopGrants.status, "active")))
-      .all();
+      );
     const shops = [];
     for (const grant of grants) {
-      const merchant = handle.db.select().from(merchants).where(eq(merchants.id, grant.merchantId)).get();
+      const merchant = (await handle.db.select().from(merchants).where(eq(merchants.id, grant.merchantId)).limit(1))[0];
       if (!merchant) continue;
       shops.push({
         merchant_id: merchant.id,
@@ -374,9 +374,9 @@ export function registerSellerRoutes(app: Hono, handle: DbHandle, auth: AuthFns)
 
   app.get("/v1/seller/shops/:id/products", async (c) => {
     const seller = await auth.requireSeller(c);
-    const merchant = findMerchant(handle, c.req.param("id"));
+    const merchant = await findMerchant(handle, c.req.param("id"));
     if (!merchant) throw jsonError("MERCHANT_NOT_FOUND", "Shop not found", 404);
-    requireGrant(handle, seller.id, merchant.id);
+    await requireGrant(handle, seller.id, merchant.id);
     if (merchant.accessTokenEnc) {
       try {
         const token = decryptAccessToken(merchant.accessTokenEnc, handle.env.accessTokenEncryptionKey, handle.env.accessTokenEncryptionKeyPrevious);
@@ -398,9 +398,9 @@ export function registerSellerRoutes(app: Hono, handle: DbHandle, auth: AuthFns)
 
   app.post("/v1/seller/shops/:id/webhooks", async (c) => {
     const seller = await auth.requireSeller(c);
-    const merchant = findMerchant(handle, c.req.param("id"));
+    const merchant = await findMerchant(handle, c.req.param("id"));
     if (!merchant) throw jsonError("MERCHANT_NOT_FOUND", "Shop not found", 404);
-    requireGrant(handle, seller.id, merchant.id);
+    await requireGrant(handle, seller.id, merchant.id);
     if (!merchant.accessTokenEnc) {
       throw jsonError("OAUTH_REQUIRED", "This shop has no Shopify token", 409);
     }
@@ -428,7 +428,7 @@ function registerSimulateRoutes(app: Hono, handle: DbHandle, auth: AuthFns) {
     const id = newId("lnk_");
     const origin = requestPublicOrigin(c.req, handle.env);
     const urls = linkUrls(origin, id, shop, handle.env.demoMode);
-    handle.db
+    await handle.db
       .insert(sellerLinks)
       .values({
         id,
@@ -441,8 +441,8 @@ function registerSimulateRoutes(app: Hono, handle: DbHandle, auth: AuthFns) {
         merchantId: null,
         createdAt: now.toISOString(),
       })
-      .run();
-    return c.json(completeLink(handle, id, shop), 201);
+      ;
+    return c.json(await completeLink(handle, id, shop), 201);
   });
 
   app.post("/v1/simulate/shopify_oauth", async (c) => {
@@ -458,11 +458,11 @@ function registerSimulateRoutes(app: Hono, handle: DbHandle, auth: AuthFns) {
       currency: p.currency ?? "USD",
     }));
     const id = body.seller_link ?? newId("lnk_");
-    const existing = handle.db.select().from(sellerLinks).where(eq(sellerLinks.id, id)).get();
+    const existing = (await handle.db.select().from(sellerLinks).where(eq(sellerLinks.id, id)).limit(1))[0];
     if (!existing) {
       const origin = requestPublicOrigin(c.req, handle.env);
       const urls = linkUrls(origin, id, shop, handle.env.demoMode);
-      handle.db
+      await handle.db
         .insert(sellerLinks)
         .values({
           id,
@@ -475,9 +475,9 @@ function registerSimulateRoutes(app: Hono, handle: DbHandle, auth: AuthFns) {
           merchantId: null,
           createdAt: now.toISOString(),
         })
-        .run();
+        ;
     }
-    const connected = completeLink(handle, id, shop, {
+    const connected = await completeLink(handle, id, shop, {
       shopifyShopId: body.shopify_shop_id ?? "gid://shopify/Shop/sim",
       accessToken: `shpat_sim_${shop}`,
       name: body.shop_name ?? shop,
@@ -500,10 +500,10 @@ function registerSellerOfferRoutes(app: Hono, handle: DbHandle, auth: AuthFns) {
     const seller = await auth.requireSeller(c);
     const body = sellerCreateOfferSchema.parse(await c.req.json());
     const merchant = body.merchant_id
-      ? findMerchant(handle, body.merchant_id)
-      : findMerchant(handle, body.shop_domain ?? "");
+      ? await findMerchant(handle, body.merchant_id)
+      : await findMerchant(handle, body.shop_domain ?? "");
     if (!merchant) throw jsonError("MERCHANT_NOT_FOUND", "Shop not found or not granted", 404);
-    requireGrant(handle, seller.id, merchant.id);
+    await requireGrant(handle, seller.id, merchant.id);
     const now = new Date().toISOString();
     const ids = body.selector.ids ?? [];
     const template = checkoutTemplateFor(merchant.shopDomain, ids, body.checkout?.tracked_url_template);
@@ -514,7 +514,7 @@ function registerSellerOfferRoutes(app: Hono, handle: DbHandle, auth: AuthFns) {
     }
     let mandateId: string | null = null;
     if (body.status === "live") {
-      const mandate = requireMandateForWrite(handle, {
+      const mandate = await requireMandateForWrite(handle, {
         sellerAgentId: seller.id,
         merchant,
         write: writeFromCreate(body),
@@ -522,7 +522,7 @@ function registerSellerOfferRoutes(app: Hono, handle: DbHandle, auth: AuthFns) {
       mandateId = mandate.id;
     }
     const id = body.id ?? newId("off_");
-    handle.db
+    await handle.db
       .insert(offers)
       .values({
         id,
@@ -553,26 +553,26 @@ function registerSellerOfferRoutes(app: Hono, handle: DbHandle, auth: AuthFns) {
         createdAt: now,
         updatedAt: now,
       })
-      .run();
-    return c.json(toSellerOffer(handle, id), 201);
+      ;
+    return c.json(await toSellerOffer(handle, id), 201);
   });
 
   app.get("/v1/seller/offers", async (c) => {
     const seller = await auth.requireSeller(c);
     const shopFilter = c.req.query("shop_domain") ?? undefined;
     const statusFilter = c.req.query("status") ?? undefined;
-    const grants = handle.db
+    const grants = (await handle.db
       .select()
       .from(shopGrants)
       .where(and(eq(shopGrants.sellerAgentId, seller.id), eq(shopGrants.status, "active")))
-      .all();
+      );
     const merchantIds = new Set(grants.map((g) => g.merchantId));
-    const rows = handle.db.select().from(offers).all();
+    const rows = (await handle.db.select().from(offers));
     const out = [];
     for (const row of rows) {
       if (!merchantIds.has(row.merchantId)) continue;
       if (statusFilter && row.status !== statusFilter) continue;
-      const merchant = handle.db.select().from(merchants).where(eq(merchants.id, row.merchantId)).get();
+      const merchant = (await handle.db.select().from(merchants).where(eq(merchants.id, row.merchantId)).limit(1))[0];
       if (!merchant) continue;
       if (shopFilter && merchant.shopDomain !== shopFilter) continue;
       out.push({ ...rowToOffer(row, merchant), mandate_id: row.mandateId });
@@ -584,11 +584,11 @@ function registerSellerOfferRoutes(app: Hono, handle: DbHandle, auth: AuthFns) {
     const seller = await auth.requireSeller(c);
     const id = c.req.param("id");
     const body = sellerPatchOfferSchema.parse(await c.req.json());
-    const row = handle.db.select().from(offers).where(eq(offers.id, id)).get();
+    const row = (await handle.db.select().from(offers).where(eq(offers.id, id)).limit(1))[0];
     if (!row) throw jsonError("OFFER_NOT_FOUND", "Offer not found", 404);
-    const merchant = handle.db.select().from(merchants).where(eq(merchants.id, row.merchantId)).get();
+    const merchant = (await handle.db.select().from(merchants).where(eq(merchants.id, row.merchantId)).limit(1))[0];
     if (!merchant) throw jsonError("MERCHANT_NOT_FOUND", "Merchant missing for offer", 500);
-    requireGrant(handle, seller.id, merchant.id);
+    await requireGrant(handle, seller.id, merchant.id);
     const nextStatus = body.status ?? row.status;
     const ids = body.selector?.ids ?? (JSON.parse(row.selectorIdsJson) as string[]);
     const rewardType = body.reward?.type ?? row.rewardType;
@@ -598,7 +598,7 @@ function registerSellerOfferRoutes(app: Hono, handle: DbHandle, auth: AuthFns) {
     const clawback = body.constraints?.clawback_days ?? row.clawbackDays;
     let mandateId = row.mandateId;
     if (nextStatus === "live") {
-      const mandate = requireMandateForWrite(handle, {
+      const mandate = await requireMandateForWrite(handle, {
         sellerAgentId: seller.id,
         merchant,
         write: {
@@ -616,7 +616,7 @@ function registerSellerOfferRoutes(app: Hono, handle: DbHandle, auth: AuthFns) {
       mandateId = mandate.id;
     }
     const now = new Date().toISOString();
-    handle.db
+    await handle.db
       .update(offers)
       .set({
         status: nextStatus,
@@ -650,33 +650,33 @@ function registerSellerOfferRoutes(app: Hono, handle: DbHandle, auth: AuthFns) {
         updatedAt: now,
       })
       .where(eq(offers.id, id))
-      .run();
-    return c.json(toSellerOffer(handle, id));
+      ;
+    return c.json(await toSellerOffer(handle, id));
   });
 
   app.post("/v1/seller/offers/:id/pause", async (c) => {
     const seller = await auth.requireSeller(c);
     const id = c.req.param("id");
-    const row = handle.db.select().from(offers).where(eq(offers.id, id)).get();
+    const row = (await handle.db.select().from(offers).where(eq(offers.id, id)).limit(1))[0];
     if (!row) throw jsonError("OFFER_NOT_FOUND", "Offer not found", 404);
-    requireGrant(handle, seller.id, row.merchantId);
-    handle.db
+    await requireGrant(handle, seller.id, row.merchantId);
+    await handle.db
       .update(offers)
       .set({ status: "paused", updatedAt: new Date().toISOString() })
       .where(eq(offers.id, id))
-      .run();
-    return c.json(toSellerOffer(handle, id));
+      ;
+    return c.json(await toSellerOffer(handle, id));
   });
 
   app.post("/v1/seller/offers/:id/resume", async (c) => {
     const seller = await auth.requireSeller(c);
     const id = c.req.param("id");
-    const row = handle.db.select().from(offers).where(eq(offers.id, id)).get();
+    const row = (await handle.db.select().from(offers).where(eq(offers.id, id)).limit(1))[0];
     if (!row) throw jsonError("OFFER_NOT_FOUND", "Offer not found", 404);
-    const merchant = handle.db.select().from(merchants).where(eq(merchants.id, row.merchantId)).get();
+    const merchant = (await handle.db.select().from(merchants).where(eq(merchants.id, row.merchantId)).limit(1))[0];
     if (!merchant) throw jsonError("MERCHANT_NOT_FOUND", "Merchant missing for offer", 500);
-    requireGrant(handle, seller.id, merchant.id);
-    const mandate = requireMandateForWrite(handle, {
+    await requireGrant(handle, seller.id, merchant.id);
+    const mandate = await requireMandateForWrite(handle, {
       sellerAgentId: seller.id,
       merchant,
       write: {
@@ -691,29 +691,29 @@ function registerSellerOfferRoutes(app: Hono, handle: DbHandle, auth: AuthFns) {
         action: "resume",
       },
     });
-    handle.db
+    await handle.db
       .update(offers)
       .set({ status: "live", mandateId: mandate.id, updatedAt: new Date().toISOString() })
       .where(eq(offers.id, id))
-      .run();
-    return c.json(toSellerOffer(handle, id));
+      ;
+    return c.json(await toSellerOffer(handle, id));
   });
 
   app.get("/v1/seller/offers/:id/performance", async (c) => {
     const seller = await auth.requireSeller(c);
     const id = c.req.param("id");
-    const row = handle.db.select().from(offers).where(eq(offers.id, id)).get();
+    const row = (await handle.db.select().from(offers).where(eq(offers.id, id)).limit(1))[0];
     if (!row) throw jsonError("OFFER_NOT_FOUND", "Offer not found", 404);
-    const merchant = handle.db.select().from(merchants).where(eq(merchants.id, row.merchantId)).get();
+    const merchant = (await handle.db.select().from(merchants).where(eq(merchants.id, row.merchantId)).limit(1))[0];
     if (!merchant) throw jsonError("MERCHANT_NOT_FOUND", "Merchant missing for offer", 500);
-    requireGrant(handle, seller.id, merchant.id);
+    await requireGrant(handle, seller.id, merchant.id);
     const offer = rowToOffer(row, merchant);
-    const tokenRows = handle.db.select().from(tokens).where(eq(tokens.offerId, id)).all();
+    const tokenRows = (await handle.db.select().from(tokens).where(eq(tokens.offerId, id)));
     const tokenIds = tokenRows.map((t) => t.tokenId);
     const orderRows =
       tokenIds.length === 0
         ? []
-        : handle.db.select().from(ordersExt).where(inArray(ordersExt.tokenId, tokenIds)).all();
+        : (await handle.db.select().from(ordersExt).where(inArray(ordersExt.tokenId, tokenIds)));
     const pending = emptyBucket();
     const cleared = emptyBucket();
     const clawed = { count: 0, gmv: "0.00" };
@@ -758,20 +758,20 @@ function registerSellerOfferRoutes(app: Hono, handle: DbHandle, auth: AuthFns) {
     const seller = await auth.requireSeller(c);
     const body = proposeMandateSchema.parse(await c.req.json());
     const merchant = body.merchant_id
-      ? findMerchant(handle, body.merchant_id)
-      : findMerchant(handle, body.shop_domain ?? "");
+      ? await findMerchant(handle, body.merchant_id)
+      : await findMerchant(handle, body.shop_domain ?? "");
     if (!merchant) throw jsonError("MERCHANT_NOT_FOUND", "Shop not found or not granted", 404);
-    requireGrant(handle, seller.id, merchant.id);
-    return c.json(proposeMandate(handle, seller.id, merchant, body), 201);
+    await requireGrant(handle, seller.id, merchant.id);
+    return c.json(await proposeMandate(handle, seller.id, merchant, body), 201);
   });
 
   app.get("/v1/seller/mandates", async (c) => {
     const seller = await auth.requireSeller(c);
     const shopFilter = c.req.query("shop_domain") ?? undefined;
-    const rows = handle.db.select().from(mandates).where(eq(mandates.sellerAgentId, seller.id)).all();
+    const rows = (await handle.db.select().from(mandates).where(eq(mandates.sellerAgentId, seller.id)));
     const out = [];
     for (const row of rows) {
-      const merchant = handle.db.select().from(merchants).where(eq(merchants.id, row.merchantId)).get();
+      const merchant = (await handle.db.select().from(merchants).where(eq(merchants.id, row.merchantId)).limit(1))[0];
       if (!merchant) continue;
       if (shopFilter && merchant.shopDomain !== shopFilter) continue;
       out.push(rowToMandate(row, merchant));
@@ -781,11 +781,11 @@ function registerSellerOfferRoutes(app: Hono, handle: DbHandle, auth: AuthFns) {
 
   app.get("/v1/seller/mandates/:id", async (c) => {
     const seller = await auth.requireSeller(c);
-    const row = handle.db.select().from(mandates).where(eq(mandates.id, c.req.param("id"))).get();
+    const row = (await handle.db.select().from(mandates).where(eq(mandates.id, c.req.param("id"))).limit(1))[0];
     if (!row || row.sellerAgentId !== seller.id) {
       throw jsonError("MANDATE_NOT_FOUND", "Mandate not found", 404);
     }
-    const merchant = handle.db.select().from(merchants).where(eq(merchants.id, row.merchantId)).get();
+    const merchant = (await handle.db.select().from(merchants).where(eq(merchants.id, row.merchantId)).limit(1))[0];
     if (!merchant) throw jsonError("MERCHANT_NOT_FOUND", "Merchant missing for mandate", 500);
     return c.json(rowToMandate(row, merchant));
   });
@@ -793,14 +793,14 @@ function registerSellerOfferRoutes(app: Hono, handle: DbHandle, auth: AuthFns) {
   app.post("/v1/seller/mandates/:id/activate", async (c) => {
     const seller = await auth.requireSeller(c);
     const body = (await c.req.json().catch(() => ({}))) as { human_confirmed?: boolean };
-    return c.json(activateMandate(handle, seller.id, c.req.param("id"), body.human_confirmed === true));
+    return c.json(await activateMandate(handle, seller.id, c.req.param("id"), body.human_confirmed === true));
   });
 
   app.post("/v1/seller/mandates/:id/revoke", async (c) => {
     const seller = await auth.requireSeller(c);
     const pauseOffers = c.req.query("pause_offers") === "true";
     return c.json(
-      revokeMandate(handle, c.req.param("id"), {
+      await revokeMandate(handle, c.req.param("id"), {
         sellerAgentId: seller.id,
         pauseOffers,
       }),

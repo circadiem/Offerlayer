@@ -1,12 +1,10 @@
 import { createHmac } from "node:crypto";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import Ajv from "ajv/dist/2020";
 import addFormats from "ajv-formats";
 import { readFileSync } from "node:fs";
-import { closeDatabase, loadEnv, openDatabase, seedDatabase, SEED_OFFER, type DbHandle } from "@offerlayer/db";
+import { closeDatabase, loadEnv, openTestDatabase, seedDatabase, SEED_OFFER, type DbHandle } from "@offerlayer/db";
 import { issueToken } from "@offerlayer/token";
 import { computePayout, offerSchema, trackedCheckoutSchema } from "@offerlayer/schema";
 import { TOOL_DEFS, SHOPPER_TOOL_NAMES } from "../../mcp/src/index.ts";
@@ -28,11 +26,10 @@ describe("offerlayer v0", () => {
   let agentKey: string;
   let shopSecret: string;
 
-  beforeEach(() => {
-    const dir = mkdtempSync(join(tmpdir(), "ol-test-"));
-    const env = loadEnv({ DATABASE_URL: `file:${join(dir, "t.db")}` });
-    handle = openDatabase(env);
-    const keys = seedDatabase(handle);
+  beforeEach(async () => {
+    const env = loadEnv({ DATABASE_URL: "memory:" });
+    handle = await openTestDatabase(env);
+    const keys = await seedDatabase(handle);
     demoKey = keys.demoKey;
     agentKey = keys.demoAgentKey;
     shopSecret = env.shopifyApiSecret;
@@ -49,7 +46,7 @@ describe("offerlayer v0", () => {
     return { res, body };
   }
 
-  it("validates the seed towel offer against offer.schema.json", () => {
+  it("validates the seed towel offer against offer.schema.json", async () => {
     const ajv = new Ajv({ allErrors: true, strict: false });
     addFormats(ajv);
     const validate = ajv.compile(offerJsonSchema);
@@ -181,20 +178,14 @@ describe("offerlayer v0", () => {
       },
       handle.env.tokenSigningSecret,
     );
-    handle.sqlite
-      .prepare(
-        "INSERT INTO tokens (token_id, offer_id, agent_id, principal_hash, exp, nonce, raw_jws, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      )
-      .run(
-        "tok_expiredtest0001",
+    await handle.raw("INSERT INTO tokens (token_id, offer_id, agent_id, principal_hash, exp, nonce, raw_jws, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", ["tok_expiredtest0001",
         "off_towel_organic_set",
         "agt_demo",
         "anon",
         issued.payload.exp,
         issued.payload.nce,
         issued.token,
-        new Date().toISOString(),
-      );
+        new Date().toISOString(),]);
     const { res, body } = await json("/v1/simulate/purchase", {
       method: "POST",
       headers: {
@@ -396,7 +387,7 @@ describe("offerlayer v0", () => {
     expect(ready).toEqual([]);
   });
 
-  it("MCP tools list includes disclosure guidance", () => {
+  it("MCP tools list includes disclosure guidance", async () => {
     expect(SHOPPER_TOOL_NAMES).toEqual([
       "search_offers",
       "get_offer",
@@ -408,8 +399,8 @@ describe("offerlayer v0", () => {
     expect(search?.description.toLowerCase()).toContain("disclosure");
   });
 
-  it("stores api keys hashed", () => {
-    const row = handle.sqlite.prepare("SELECT api_key_hash FROM agents WHERE id = ?").get("agt_demo") as {
+  it("stores api keys hashed", async () => {
+    const row = (await handle.raw("SELECT api_key_hash FROM agents WHERE id = $1", ["agt_demo"]))[0] as {
       api_key_hash: string;
     };
     expect(row.api_key_hash).not.toBe(agentKey);
@@ -423,11 +414,10 @@ describe("offerlayer v0.3 shop pay attach", () => {
   let agentKey: string;
   let shopSecret: string;
 
-  beforeEach(() => {
-    const dir = mkdtempSync(join(tmpdir(), "ol-v03-"));
-    const env = loadEnv({ DATABASE_URL: `file:${join(dir, "t.db")}` });
-    handle = openDatabase(env);
-    const keys = seedDatabase(handle);
+  beforeEach(async () => {
+    const env = loadEnv({ DATABASE_URL: "memory:" });
+    handle = await openTestDatabase(env);
+    const keys = await seedDatabase(handle);
     agentKey = keys.demoAgentKey;
     shopSecret = env.shopifyApiSecret;
     app = createApp(handle);

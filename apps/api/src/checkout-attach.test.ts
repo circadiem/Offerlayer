@@ -13,11 +13,11 @@ const seed = SEED_OFFER as Offer;
 const TOKEN = "olt_testtokenvalue";
 
 describe("checkout attach v0.3", () => {
-  it("seed Product/1001 has no variant gid", () => {
+  it("seed Product/1001 has no variant gid", async () => {
     expect(resolveVariantGid(seed)).toBeNull();
   });
 
-  it("distinct cart numeric id becomes a ProductVariant gid", () => {
+  it("distinct cart numeric id becomes a ProductVariant gid", async () => {
     const offer: Offer = {
       ...seed,
       selector: { ...seed.selector, ids: ["gid://shopify/Product/9001001"] },
@@ -30,7 +30,7 @@ describe("checkout attach v0.3", () => {
     expect(resolveVariantGid(offer)).toBe("gid://shopify/ProductVariant/9002001");
   });
 
-  it("explicit ProductVariant gid wins", () => {
+  it("explicit ProductVariant gid wins", async () => {
     const offer: Offer = {
       ...seed,
       selector: {
@@ -41,13 +41,13 @@ describe("checkout attach v0.3", () => {
     expect(resolveVariantGid(offer)).toBe("gid://shopify/ProductVariant/9002001");
   });
 
-  it("myshopify.com shops get payment=shop_pay", () => {
+  it("myshopify.com shops get payment=shop_pay", async () => {
     expect(shopSupportsShopPay("demo-towels.myshopify.com")).toBe(true);
     expect(shopSupportsShopPay("https://demo-towels.myshopify.com/cart")).toBe(true);
     expect(shopSupportsShopPay("merchant.example.com")).toBe(false);
   });
 
-  it("permalink stamps agent_ref, utm, and shop_pay", () => {
+  it("permalink stamps agent_ref, utm, and shop_pay", async () => {
     const url = buildPermalink({
       template: seed.checkout.tracked_url_template,
       token: TOKEN,
@@ -63,7 +63,7 @@ describe("checkout attach v0.3", () => {
     expect(url).not.toContain("discount=");
   });
 
-  it("a one-time code is on that checkout only", () => {
+  it("a one-time code is on that checkout only", async () => {
     const url = buildPermalink({
       template: seed.checkout.tracked_url_template,
       token: TOKEN,
@@ -75,7 +75,7 @@ describe("checkout attach v0.3", () => {
     expect(url).not.toContain("discount=OLABC123&discount=");
   });
 
-  it("seed handoff omits line_items and warns", () => {
+  it("seed handoff omits line_items and warns", async () => {
     const handoff = buildCheckoutHandoff({ offer: seed, token: TOKEN });
     expect(handoff.agentic.line_items).toBeUndefined();
     expect(handoff.agentic.warning).toBe("NO_VARIANT_GID");
@@ -92,7 +92,7 @@ describe("checkout attach v0.3", () => {
     }));
   });
 
-  it("real variant produces agentic line_items", () => {
+  it("real variant produces agentic line_items", async () => {
     const offer: Offer = {
       ...seed,
       merchant: { ...seed.merchant, shop_domain: "towels-dev.myshopify.com" },
@@ -116,7 +116,7 @@ describe("checkout attach v0.3", () => {
 describe("webhook token extract v0.3", () => {
   const token = "olt_abc.def-ghi";
 
-  it("prefers note_attributes agent_ref", () => {
+  it("prefers note_attributes agent_ref", async () => {
     expect(
       extractOrderToken({
         note_attributes: [{ name: "agent_ref", value: token }],
@@ -126,21 +126,21 @@ describe("webhook token extract v0.3", () => {
     ).toBe(token);
   });
 
-  it("reads order note when attributes missing", () => {
+  it("reads order note when attributes missing", async () => {
     expect(extractOrderToken({ note: `please use offerlayer ${token} thanks` })).toBe(token);
   });
 
-  it("reads landing_site utm_content", () => {
+  it("reads landing_site utm_content", async () => {
     expect(extractOrderToken({ landing_site: `/?utm_content=${token}` })).toBe(token);
   });
 
-  it("reads referring_site agent_ref", () => {
+  it("reads referring_site agent_ref", async () => {
     expect(
       extractOrderToken({ referring_site: `https://demo-towels.myshopify.com/?agent_ref=${token}` }),
     ).toBe(token);
   });
 
-  it("reads line item property agent_ref", () => {
+  it("reads line item property agent_ref", async () => {
     expect(
       extractOrderToken({
         line_items: [{ properties: [{ name: "agent_ref", value: token }] }],
@@ -148,7 +148,7 @@ describe("webhook token extract v0.3", () => {
     ).toBe(token);
   });
 
-  it("does not attribute offerlayer_offer without a token", () => {
+  it("does not attribute offerlayer_offer without a token", async () => {
     expect(
       extractOrderToken({
         note_attributes: [{ name: "offerlayer_offer", value: "off_towel_organic_set" }],

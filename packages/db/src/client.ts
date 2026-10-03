@@ -1,167 +1,104 @@
 import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import Database from "better-sqlite3";
-import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { ExtractTablesWithRelations } from "drizzle-orm";
+import type { PgDatabase, PgQueryResultHKT, PgTransaction } from "drizzle-orm/pg-core";
 import { schema } from "./schema.ts";
-import { loadEnv, resolveWritableSqlitePath, type OfferlayerEnv } from "./env.ts";
-import { MIGRATION_SQL } from "./migration-sql.ts";
+import { loadEnv, type OfferlayerEnv } from "./env.ts";
+import { pgSslConfig } from "./ssl.ts";
 
-export type SqliteDatabase = Database.Database;
-export type DatabaseClient = BetterSQLite3Database<typeof schema>;
+const HERE = dirname(fileURLToPath(import.meta.url));
+export const MIGRATIONS_DIR = join(HERE, "../migrations");
+
+type Schema = typeof schema;
+/** The Drizzle client. Same API on node-postgres (production) and PGlite (tests, local demo). */
+export type Database = PgDatabase<PgQueryResultHKT, Schema>;
+export type Transaction = PgTransaction<PgQueryResultHKT, Schema, ExtractTablesWithRelations<Schema>>;
+/** Anything queries can run on: the client or an open transaction. */
+export type Queryable = Database | Transaction;
 
 export interface DbHandle {
-  sqlite: Database.Database;
-  db: DatabaseClient;
+  db: Database;
   env: OfferlayerEnv;
-  path: string;
+  kind: "postgres" | "pglite";
+  /** Raw parameterized SQL, for scripts and tests. Returns rows. */
+  raw: (text: string, params?: unknown[]) => Promise<Record<string, unknown>[]>;
+  close: () => Promise<void>;
 }
 
-function openSqliteAt(path: string): Database.Database {
-  if (path !== ":memory:") {
-    mkdirSync(dirname(path), { recursive: true });
+/**
+ * Open the database named by env.database.
+ *
+ * - Postgres: a node-postgres pool. Queries never use named prepared
+ *   statements, so this works through Supabase's transaction-mode pooler
+ *   (port 6543). Migrations are NOT run here; `pnpm db:migrate` runs them at
+ *   build time, over a direct connection when DATABASE_URL_DIRECT is set.
+ * - PGlite: an embedded Postgres, migrated on open.
+ */
+export async function openDatabase(env: OfferlayerEnv = loadEnv()): Promise<DbHandle> {
+  if (env.database.kind === "postgres") {
+    const pg = await import("pg");
+    const { drizzle } = await import("drizzle-orm/node-postgres");
+    const pool = new pg.default.Pool({
+      connectionString: env.database.url,
+      max: env.database.poolMax,
+      idleTimeoutMillis: 10_000,
+      ssl: pgSslConfig(env.database.url),
+    });
+    const db = drizzle(pool, { schema }) as unknown as Database;
+    return {
+      db,
+      env,
+      kind: "postgres",
+      raw: async (text, params) => (await pool.query(text, params)).rows,
+      close: () => pool.end(),
+    };
   }
-  const sqlite = new Database(path);
-  sqlite.pragma("foreign_keys = ON");
+
+  const { PGlite } = await import("@electric-sql/pglite");
+  const dataDir = env.database.dataDir;
+  if (dataDir) mkdirSync(dirname(dataDir), { recursive: true });
+  const client = new PGlite(dataDir ?? undefined);
+  const handle = await pgliteHandle(client, env);
+  await migratePglite(handle);
+  return handle;
+}
+
+type PGliteClient = import("@electric-sql/pglite").PGlite;
+
+export async function pgliteHandle(client: PGliteClient, env: OfferlayerEnv): Promise<DbHandle> {
+  const { drizzle } = await import("drizzle-orm/pglite");
+  const db = drizzle(client, { schema }) as unknown as Database;
+  return {
+    db,
+    env,
+    kind: "pglite",
+    raw: async (text, params) => (await client.query<Record<string, unknown>>(text, params)).rows,
+    close: () => client.close(),
+  };
+}
+
+export async function migratePglite(handle: DbHandle): Promise<void> {
+  const { migrate } = await import("drizzle-orm/pglite/migrator");
+  await migrate(handle.db as never, { migrationsFolder: MIGRATIONS_DIR });
+}
+
+/** Apply pending migrations to a Postgres URL (build step; see scripts/db-migrate.ts). */
+export async function migratePostgres(url: string): Promise<void> {
+  const pg = await import("pg");
+  const { drizzle } = await import("drizzle-orm/node-postgres");
+  const { migrate } = await import("drizzle-orm/node-postgres/migrator");
+  const pool = new pg.default.Pool({ connectionString: url, max: 1, ssl: pgSslConfig(url) });
   try {
-    sqlite.pragma("journal_mode = WAL");
-  } catch {
-    // :memory: or restricted FS
-  }
-  return sqlite;
-}
-
-export function openSqlite(path: string): Database.Database {
-  const attempts = [path, resolveWritableSqlitePath(), ":memory:"];
-  const seen = new Set<string>();
-  let lastErr: unknown;
-  for (const candidate of attempts) {
-    if (seen.has(candidate)) continue;
-    seen.add(candidate);
-    try {
-      return openSqliteAt(candidate);
-    } catch (err) {
-      lastErr = err;
-    }
-  }
-  throw lastErr instanceof Error ? lastErr : new Error("Failed to open sqlite");
-}
-
-export function migrate(sqlite: Database.Database): void {
-  sqlite.exec(MIGRATION_SQL);
-  const agentCols = sqlite.prepare("PRAGMA table_info(agents)").all() as { name: string }[];
-  if (!agentCols.some((c) => c.name === "role")) {
-    sqlite.exec("ALTER TABLE agents ADD COLUMN role TEXT NOT NULL DEFAULT 'shopper'");
-  }
-  sqlite.exec(`
-CREATE TABLE IF NOT EXISTS seller_links (
-  id TEXT PRIMARY KEY,
-  seller_agent_id TEXT NOT NULL REFERENCES agents(id),
-  shop_domain TEXT,
-  status TEXT NOT NULL,
-  install_url TEXT NOT NULL,
-  nonce TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  merchant_id TEXT REFERENCES merchants(id),
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS shop_grants (
-  id TEXT PRIMARY KEY,
-  merchant_id TEXT NOT NULL REFERENCES merchants(id),
-  seller_agent_id TEXT NOT NULL REFERENCES agents(id),
-  status TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  UNIQUE (merchant_id, seller_agent_id)
-);
-
-CREATE TABLE IF NOT EXISTS mandates (
-  id TEXT PRIMARY KEY,
-  seller_agent_id TEXT NOT NULL REFERENCES agents(id),
-  merchant_id TEXT NOT NULL REFERENCES merchants(id),
-  status TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  allow_json TEXT NOT NULL,
-  caps_json TEXT NOT NULL,
-  selector_json TEXT NOT NULL,
-  card_text TEXT NOT NULL,
-  human_confirmed_at TEXT,
-  revoked_at TEXT,
-  superseded_by TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_mandates_seller_merchant ON mandates(seller_agent_id, merchant_id, status);
-`);
-  const offerCols = sqlite.prepare("PRAGMA table_info(offers)").all() as { name: string }[];
-  if (!offerCols.some((c) => c.name === "mandate_id")) {
-    sqlite.exec("ALTER TABLE offers ADD COLUMN mandate_id TEXT");
-  }
-  const merchantCols = sqlite.prepare("PRAGMA table_info(merchants)").all() as { name: string }[];
-  if (!merchantCols.some((c) => c.name === "catalog_json")) {
-    sqlite.exec("ALTER TABLE merchants ADD COLUMN catalog_json TEXT");
-  }
-  addColumns(sqlite, "agents", { rate_per_minute: "INTEGER", rate_per_day: "INTEGER" });
-  addColumns(sqlite, "tokens", {
-    issued_by: "TEXT",
-    discount_code: "TEXT",
-    discount_node_id: "TEXT",
-    discount_deleted_at: "TEXT",
-    discount_cleanup_error: "TEXT",
-  });
-  addColumns(sqlite, "orders_ext", {
-    order_total: "TEXT",
-    attributed_lines_json: "TEXT",
-    refunded_total: "TEXT NOT NULL DEFAULT '0.00'",
-  });
-  sqlite.exec(`
-CREATE INDEX IF NOT EXISTS idx_tokens_issued_by ON tokens(issued_by, created_at);
-CREATE INDEX IF NOT EXISTS idx_tokens_offer_created ON tokens(offer_id, created_at);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_token ON orders_ext(token_id);
-
-CREATE TABLE IF NOT EXISTS order_refunds (
-  id TEXT PRIMARY KEY,
-  order_ext_id TEXT NOT NULL REFERENCES orders_ext(id),
-  shopify_refund_id TEXT NOT NULL,
-  amount TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  UNIQUE (order_ext_id, shopify_refund_id)
-);
-
-CREATE TABLE IF NOT EXISTS webhook_events (
-  webhook_id TEXT PRIMARY KEY,
-  topic TEXT NOT NULL,
-  shop_domain TEXT,
-  result_json TEXT NOT NULL,
-  received_at TEXT NOT NULL
-);
-`);
-  // Pre-launch cleanup: older builds stored the raw order email in
-  // email_hash. Drop those values rather than migrate them.
-  sqlite.exec(`
-UPDATE orders_ext SET email_hash = NULL WHERE email_hash LIKE '%@%';
-DELETE FROM principals WHERE email_hash LIKE '%@%';
-`);
-}
-
-function addColumns(sqlite: Database.Database, table: string, cols: Record<string, string>): void {
-  const existing = new Set(
-    (sqlite.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name),
-  );
-  for (const [name, type] of Object.entries(cols)) {
-    if (!existing.has(name)) sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
+    await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_DIR });
+  } finally {
+    await pool.end();
   }
 }
 
-export function openDatabase(env: OfferlayerEnv = loadEnv()): DbHandle {
-  const sqlite = openSqlite(env.databasePath);
-  migrate(sqlite);
-  const db = drizzle(sqlite, { schema });
-  return { sqlite, db, env, path: env.databasePath };
-}
-
-export function closeDatabase(handle: DbHandle): void {
+export async function closeDatabase(handle: DbHandle): Promise<void> {
   try {
-    handle.sqlite.close();
+    await handle.close();
   } catch {
     // already closed
   }

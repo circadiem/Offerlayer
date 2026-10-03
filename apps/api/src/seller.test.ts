@@ -1,12 +1,9 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   closeDatabase,
   hashApiKey,
   loadEnv,
-  openDatabase,
+  openTestDatabase,
   seedDatabase,
   type DbHandle,
 } from "@offerlayer/db";
@@ -22,16 +19,15 @@ describe("offerlayer v0.1 seller", () => {
   let sellerKey: string;
   let otherSellerKey: string;
 
-  beforeEach(() => {
-    const dir = mkdtempSync(join(tmpdir(), "ol-seller-"));
-    const env = loadEnv({ DATABASE_URL: `file:${join(dir, "t.db")}` });
-    handle = openDatabase(env);
-    const keys = seedDatabase(handle);
+  beforeEach(async () => {
+    const env = loadEnv({ DATABASE_URL: "memory:" });
+    handle = await openTestDatabase(env);
+    const keys = await seedDatabase(handle);
     demoKey = keys.demoKey;
     shopperKey = keys.demoAgentKey;
     sellerKey = keys.sellerAgentKey;
     otherSellerKey = "agt_sell_other_v0_offerlayer";
-    handle.db
+    await handle.db
       .insert(agents)
       .values({
         id: "agt_seller_other",
@@ -42,7 +38,7 @@ describe("offerlayer v0.1 seller", () => {
         role: "seller",
         createdAt: new Date().toISOString(),
       })
-      .run();
+      ;
     app = createApp(handle);
   });
 
@@ -89,10 +85,10 @@ describe("offerlayer v0.1 seller", () => {
     });
   }
 
-  it("seed prints hashed seller and shopper keys", () => {
+  it("seed prints hashed seller and shopper keys", async () => {
     expect(sellerKey.startsWith("agt_sell_")).toBe(true);
     expect(shopperKey.startsWith("agt_live_")).toBe(true);
-    const seller = handle.sqlite.prepare("SELECT role, api_key_hash FROM agents WHERE id = ?").get("agt_seller") as {
+    const seller = (await handle.raw("SELECT role, api_key_hash FROM agents WHERE id = $1", ["agt_seller"]))[0] as {
       role: string;
       api_key_hash: string;
     };
@@ -305,7 +301,7 @@ describe("offerlayer v0.1 seller", () => {
     expect(perf.body.pending_hold.count).toBe(1);
   });
 
-  it("MCP seller vs shopper tool split", () => {
+  it("MCP seller vs shopper tool split", async () => {
     expect(toolsForKeys({ agentKey: "x" })).toEqual([...SHOPPER_TOOL_NAMES]);
     expect(toolsForKeys({ sellerKey: "x" })).toEqual([...SELLER_TOOL_NAMES]);
     const link = SELLER_TOOL_DEFS.find((t) => t.name === "create_shop_link");

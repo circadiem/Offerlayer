@@ -5,7 +5,9 @@
   "type": "module",
   "packageManager": "pnpm@10.15.1",
   "pnpm": {
-    "onlyBuiltDependencies": ["better-sqlite3", "esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   },
   "workspaces": [
     "packages/*",
@@ -17,7 +19,7 @@
   "scripts": {
     "dev": "node scripts/with-app-env.mjs vite dev --host 0.0.0.0 --port 8080",
     "build": "node scripts/with-app-env.mjs vite build && npm run db:migrate",
-    "db:migrate": "node scripts/migrate.mjs",
+    "db:migrate": "tsx scripts/db-migrate.ts",
     "build:dev": "node scripts/with-app-env.mjs vite build --mode development",
     "preview": "node scripts/with-app-env.mjs vite preview",
     "preview:restart": "node scripts/preview.mjs restart",
@@ -37,7 +39,8 @@
     "demo:agentic": "tsx scripts/demo-agentic.ts",
     "api": "tsx apps/api/src/index.ts",
     "mcp": "tsx apps/mcp/src/stdio.ts",
-    "shopify": "tsx apps/shopify/server.ts"
+    "shopify": "tsx apps/shopify/server.ts",
+    "db:generate": "drizzle-kit generate --config packages/db/drizzle.config.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.4",
@@ -75,9 +78,7 @@
     "@tanstack/react-table": "^8.21.0",
     "@tanstack/router-core": "^1.171.34",
     "@tanstack/router-plugin": "^1.168.42",
-    "@types/better-sqlite3": "^9.6.0",
     "better-auth": "~1.6.30",
-    "better-sqlite3": "^13.0.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -113,6 +114,7 @@
     "@vitejs/plugin-react": "^5.2.0",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
+    "drizzle-kit": "^0.31.11",
     "eslint": "^9.20.0",
     "eslint-config-prettier": "^10.1.1",
     "eslint-plugin-prettier": "^5.2.6",

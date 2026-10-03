@@ -4,7 +4,7 @@ import { issueToken, verifyToken, TokenError } from "./index.ts";
 const secret = "offerlayer_token_secret_v0_change_me_32b";
 
 describe("HMAC tokens", () => {
-  it("round-trips", () => {
+  it("round-trips", async () => {
     const { token, payload } = issueToken(
       { offerId: "off_towel_organic_set", agentId: "agt_demo", principalHash: "anon" },
       secret,
@@ -15,7 +15,7 @@ describe("HMAC tokens", () => {
     expect(verified.nce).toBe(payload.nce);
   });
 
-  it("rejects expiry", () => {
+  it("rejects expiry", async () => {
     const { token } = issueToken(
       {
         offerId: "off_towel_organic_set",
@@ -28,7 +28,7 @@ describe("HMAC tokens", () => {
     expect(() => verifyToken(token, secret)).toThrow(TokenError);
   });
 
-  it("rejects tampering", () => {
+  it("rejects tampering", async () => {
     const { token } = issueToken(
       { offerId: "off_towel_organic_set", agentId: "agt_demo", principalHash: "anon" },
       secret,

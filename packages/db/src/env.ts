@@ -1,6 +1,5 @@
-import { accessSync, constants, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -31,8 +30,7 @@ loadDotEnv();
 
 export interface OfferlayerEnv {
   port: number;
-  databaseUrl: string;
-  databasePath: string;
+  database: DatabaseConfig;
   /** Signs checkout tokens (HMAC). */
   tokenSigningSecret: string;
   /** AES-256-GCM key material for stored Shopify access tokens. */
@@ -52,7 +50,6 @@ export interface OfferlayerEnv {
   museAgentKey: string;
   sellerAgentKey: string;
   publicBaseUrl: string;
-  durablePostgres: boolean;
   /** True only when OFFERLAYER_DEMO=1. Demo-only defaults apply; never true in production. */
   demoMode: boolean;
   limits: CheckoutLimits;
@@ -91,40 +88,39 @@ export function isPostgresUrl(url: string): boolean {
   return /^(postgres|postgresql)(\+[^:]*)?:\/\//i.test(url.trim());
 }
 
-export function canWriteDir(dir: string): boolean {
-  try {
-    mkdirSync(dir, { recursive: true });
-    accessSync(dir, constants.W_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
+export type DatabaseConfig =
+  | { kind: "postgres"; url: string; poolMax: number }
+  /** dataDir null = in memory. */
+  | { kind: "pglite"; dataDir: string | null };
 
-export function resolveWritableSqlitePath(preferred?: string): string {
-  const candidates = [
-    preferred,
-    process.env.OFFERLAYER_SQLITE_PATH,
-    join(tmpdir(), "offerlayer.db"),
-    "/tmp/offerlayer.db",
-  ].filter((p): p is string => typeof p === "string" && p.length > 0 && p !== ":memory:" && !isPostgresUrl(p));
-  for (const p of candidates) {
-    if (canWriteDir(dirname(p))) return p;
+/**
+ * DATABASE_URL forms:
+ * - postgres://… or postgresql://…  real Postgres (required in production)
+ * - pglite:<dir>                     embedded Postgres persisted to <dir>
+ * - memory:                          embedded Postgres in memory
+ * - unset                            demo mode only: pglite:./data/pglite
+ */
+function resolveDatabase(raw: string, demoMode: boolean, poolMax: number): DatabaseConfig {
+  const url = raw.trim();
+  if (isPostgresUrl(url)) return { kind: "postgres", url, poolMax };
+  if (!demoMode) {
+    throw new Error(
+      "[offerlayer] refusing to boot: DATABASE_URL must be a postgres:// URL outside demo mode " +
+        "(an embedded database on a serverless host loses data).",
+    );
   }
-  return ":memory:";
-}
-
-function resolveDbPath(databaseUrl: string): string {
-  if (isPostgresUrl(databaseUrl)) {
-    return resolveWritableSqlitePath(join(tmpdir(), "offerlayer.db"));
+  if (!url) return { kind: "pglite", dataDir: resolve(REPO_ROOT, "data/pglite") };
+  if (url === "memory:") return { kind: "pglite", dataDir: null };
+  if (url.startsWith("pglite:")) {
+    const dir = url.slice("pglite:".length);
+    return { kind: "pglite", dataDir: isAbsolute(dir) ? dir : resolve(REPO_ROOT, dir) };
   }
-  const raw = databaseUrl.startsWith("file:") ? databaseUrl.slice(5) : databaseUrl;
-  if (raw === ":memory:") return ":memory:";
-  const resolved = isAbsolute(raw) ? raw : resolve(REPO_ROOT, raw);
-  if (!canWriteDir(dirname(resolved))) {
-    return resolveWritableSqlitePath();
+  if (url.startsWith("file:")) {
+    throw new Error(
+      "[offerlayer] DATABASE_URL=file:… (SQLite) is no longer supported. Use pglite:<dir>, memory:, or postgres://.",
+    );
   }
-  return resolved;
+  throw new Error(`[offerlayer] unrecognized DATABASE_URL: ${url.slice(0, 12)}…`);
 }
 
 function intEnv(get: (key: string, fallback?: string) => string, key: string, fallback: number): number {
@@ -194,7 +190,7 @@ export function loadEnv(overrides: Partial<Record<string, string>> = {}): Offerl
     }
   }
 
-  const databaseUrl = get("DATABASE_URL", "file:./data/dev.db");
+  const database = resolveDatabase(get("DATABASE_URL", ""), demoMode, intEnv(get, "DB_POOL_MAX", 5));
   const portRaw = get("OFFERLAYER_API_PORT") || (get("PORT") === "8080" ? "" : get("PORT"));
   const port = Number(portRaw || "8787");
   const vercelHost = get("VERCEL_PROJECT_PRODUCTION_URL") || get("VERCEL_URL");
@@ -220,8 +216,7 @@ export function loadEnv(overrides: Partial<Record<string, string>> = {}): Offerl
   }
   return {
     port,
-    databaseUrl,
-    databasePath: resolveDbPath(databaseUrl),
+    database,
     tokenSigningSecret: get("TOKEN_SIGNING_SECRET", demoMode ? SEED_DEFAULTS.tokenSigningSecret : ""),
     accessTokenEncryptionKey: get(
       "ACCESS_TOKEN_ENCRYPTION_KEY",
@@ -241,7 +236,6 @@ export function loadEnv(overrides: Partial<Record<string, string>> = {}): Offerl
     museAgentKey: get("MUSE_AGENT_KEY", demoMode ? SEED_DEFAULTS.museAgentKey : ""),
     sellerAgentKey: get("SELLER_AGENT_KEY", demoMode ? SEED_DEFAULTS.sellerAgentKey : ""),
     publicBaseUrl,
-    durablePostgres: isPostgresUrl(databaseUrl),
     demoMode,
     limits: {
       checkoutTtlSeconds: intEnv(get, "CHECKOUT_TTL_SECONDS", 30 * 60),

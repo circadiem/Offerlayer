@@ -12,7 +12,7 @@ import {
   simulatePurchaseSchema,
   upsertOfferSchema,
 } from "@offerlayer/schema";
-import { agents, eq, merchants, offers, rowToOffer, REPO_ROOT, type DbHandle } from "@offerlayer/db";
+import { agents, and, eq, merchants, offers, rowToOffer, REPO_ROOT, type DbHandle } from "@offerlayer/db";
 import {
   clearHold,
   conversionForToken,
@@ -109,7 +109,7 @@ export function createApp(handle: DbHandle) {
   }) => {
     const key = bearer(hdr(c, "authorization"));
     if (!key) throw jsonError("UNAUTHORIZED", "Missing agent bearer token", 401);
-    const agent = lookupAgentByKey(handle, key);
+    const agent = await lookupAgentByKey(handle, key);
     if (!agent) throw jsonError("UNAUTHORIZED", "Invalid agent key", 401);
     return agent;
   };
@@ -195,13 +195,13 @@ export function createApp(handle: DbHandle) {
     });
   });
 
-  app.get("/.well-known/agent-offers.json", (c) => {
+  app.get("/.well-known/agent-offers.json", async (c) => {
     const shop = c.req.query("shop") ?? hostShop(c.req.header("host"));
-    const list = listOffers(handle, { shop: shop ?? undefined, limit: 50 });
+    const list = await listOffers(handle, { shop: shop ?? undefined, limit: 50 });
     return c.json({ protocol: "offerlayer/0.1", offers: list });
   });
 
-  app.get("/v1/offers", (c) => {
+  app.get("/v1/offers", async (c) => {
     const q = c.req.query("q") ?? undefined;
     const shipTo = c.req.query("ship_to") ?? undefined;
     const maxPrice = c.req.query("max_price") ?? undefined;
@@ -209,12 +209,12 @@ export function createApp(handle: DbHandle) {
     const productId = c.req.query("product_id") ?? undefined;
     const limitRaw = Number(c.req.query("limit") ?? "20");
     const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 50) : 20;
-    const offersList = listOffers(handle, { q, shipTo, maxPrice, shop, productId, limit });
+    const offersList = await listOffers(handle, { q, shipTo, maxPrice, shop, productId, limit });
     return c.json({ offers: offersList });
   });
 
-  app.get("/v1/offers/:id", (c) => {
-    const { offer } = loadOffer(handle, c.req.param("id"));
+  app.get("/v1/offers/:id", async (c) => {
+    const { offer } = await loadOffer(handle, c.req.param("id"));
     if (offer.status !== "live") {
       throw jsonError("OFFER_NOT_FOUND", "Offer not found", 404);
     }
@@ -238,7 +238,7 @@ export function createApp(handle: DbHandle) {
     const agent = await requireShopper(c);
     const body = referRequestSchema.parse(await c.req.json());
     if (body.to_agent_id) {
-      const dest = handle.db.select().from(agents).where(eq(agents.id, body.to_agent_id)).get();
+      const dest = (await handle.db.select().from(agents).where(eq(agents.id, body.to_agent_id)).limit(1))[0];
       if (!dest) throw jsonError("AGENT_NOT_FOUND", "to_agent_id not found", 404);
     }
     const presenting = body.to_agent_id ?? agent.id;
@@ -254,7 +254,7 @@ export function createApp(handle: DbHandle) {
   app.get("/v1/conversions/:token{.+}", async (c) => {
     await requireShopper(c);
     const token = c.req.param("token");
-    return c.json(conversionForToken(handle, token));
+    return c.json(await conversionForToken(handle, token));
   });
 
   // Simulated purchases and hold clearing exist for local demos and tests
@@ -264,7 +264,7 @@ export function createApp(handle: DbHandle) {
     app.post("/v1/simulate/purchase", async (c) => {
       if (!isDemoKey(c)) await requireShopper(c);
       const body = simulatePurchaseSchema.parse(await c.req.json());
-      const conversion = recordPaidOrder(handle, {
+      const conversion = await recordPaidOrder(handle, {
         token: body.token,
         orderTotal: body.order_total,
         currency: body.currency,
@@ -276,13 +276,13 @@ export function createApp(handle: DbHandle) {
     app.post("/v1/simulate/clear", async (c) => {
       requireDemoOrInternal(c);
       const body = simulateClearSchema.parse(await c.req.json());
-      return c.json(clearHold(handle, body.token));
+      return c.json(await clearHold(handle, body.token));
     });
   }
 
   app.post("/v1/webhooks/shopify", async (c) => {
     const raw = await c.req.text();
-    const result = handleShopifyWebhook(handle, {
+    const result = await handleShopifyWebhook(handle, {
       topic: c.req.header("x-shopify-topic") ?? "",
       rawBody: raw,
       hmac: c.req.header("x-shopify-hmac-sha256") ?? undefined,
@@ -306,7 +306,7 @@ export function createApp(handle: DbHandle) {
   app.post("/v1/internal/offers", async (c) => {
     requireDemoOrInternal(c);
     const body = upsertOfferSchema.parse(await c.req.json());
-    const saved = upsertOffer(handle, body);
+    const saved = await upsertOffer(handle, body);
     return c.json(saved, 201);
   });
 
@@ -349,7 +349,7 @@ function hostShop(host: string | undefined): string | null {
   return h;
 }
 
-export function listOffers(
+export async function listOffers(
   handle: DbHandle,
   filters: {
     q?: string;
@@ -360,12 +360,16 @@ export function listOffers(
     limit: number;
   },
 ) {
-  const rows = handle.db.select().from(offers).where(eq(offers.status, "live")).all();
+  const rows = await handle.db
+    .select({ row: offers, merchant: merchants })
+    .from(offers)
+    .innerJoin(merchants, eq(merchants.id, offers.merchantId))
+    .where(
+      filters.shop ? and(eq(offers.status, "live"), eq(merchants.shopDomain, filters.shop)) : eq(offers.status, "live"),
+    )
+    .orderBy(offers.createdAt);
   const out = [];
-  for (const row of rows) {
-    const merchant = handle.db.select().from(merchants).where(eq(merchants.id, row.merchantId)).get();
-    if (!merchant) continue;
-    if (filters.shop && merchant.shopDomain !== filters.shop) continue;
+  for (const { row, merchant } of rows) {
     const offer = rowToOffer(row, merchant);
     if (filters.q) {
       const hay = `${offer.selector.title ?? ""} ${offer.disclosure} ${offer.id} ${merchant.name}`.toLowerCase();
@@ -390,15 +394,15 @@ export function listOffers(
   return out;
 }
 
-function upsertOffer(handle: DbHandle, body: ReturnType<typeof upsertOfferSchema.parse>) {
+async function upsertOffer(handle: DbHandle, body: ReturnType<typeof upsertOfferSchema.parse>) {
   const now = new Date().toISOString();
-  let merchant = handle.db
+  let merchant = (await handle.db
     .select()
     .from(merchants)
     .where(eq(merchants.shopDomain, body.shop_domain))
-    .get();
+    .limit(1))[0];
   if (!merchant) {
-    handle.db
+    await handle.db
       .insert(merchants)
       .values({
         id: newId("mer_"),
@@ -409,16 +413,16 @@ function upsertOffer(handle: DbHandle, body: ReturnType<typeof upsertOfferSchema
         website: body.website ?? `https://${body.shop_domain}`,
         createdAt: now,
       })
-      .run();
-    merchant = handle.db
+      ;
+    merchant = (await handle.db
       .select()
       .from(merchants)
       .where(eq(merchants.shopDomain, body.shop_domain))
-      .get();
+      .limit(1))[0];
   }
   if (!merchant) throw jsonError("MERCHANT_NOT_FOUND", "Failed to upsert merchant", 500);
   const id = body.id ?? newId("off_");
-  const existing = handle.db.select().from(offers).where(eq(offers.id, id)).get();
+  const existing = (await handle.db.select().from(offers).where(eq(offers.id, id)).limit(1))[0];
   const values = {
     id,
     merchantId: merchant.id,
@@ -447,10 +451,10 @@ function upsertOffer(handle: DbHandle, body: ReturnType<typeof upsertOfferSchema
     updatedAt: now,
   };
   if (existing) {
-    handle.db.update(offers).set(values).where(eq(offers.id, id)).run();
+    await handle.db.update(offers).set(values).where(eq(offers.id, id));
   } else {
-    handle.db.insert(offers).values({ ...values, createdAt: now }).run();
+    await handle.db.insert(offers).values({ ...values, createdAt: now });
   }
-  const { offer } = loadOffer(handle, id);
+  const { offer } = await loadOffer(handle, id);
   return offer;
 }

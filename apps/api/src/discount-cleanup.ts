@@ -27,7 +27,7 @@ export async function cleanupExpiredDiscounts(
 ): Promise<CleanupResult> {
   const now = opts.now ?? new Date();
   const nowSec = Math.floor(now.getTime() / 1000);
-  const rows = handle.db
+  const rows = (await handle.db
     .select({
       tokenId: tokens.tokenId,
       nodeId: tokens.discountNodeId,
@@ -46,7 +46,7 @@ export async function cleanupExpiredDiscounts(
       ),
     )
     .limit(opts.limit ?? 250)
-    .all();
+    );
 
   const result: CleanupResult = { checked: rows.length, deleted: 0, failed: 0 };
   for (const row of rows) {
@@ -72,18 +72,18 @@ export async function cleanupExpiredDiscounts(
     }
     if (error) {
       result.failed += 1;
-      handle.db
+      await handle.db
         .update(tokens)
         .set({ discountCleanupError: error })
         .where(eq(tokens.tokenId, row.tokenId))
-        .run();
+        ;
     } else {
       result.deleted += 1;
-      handle.db
+      await handle.db
         .update(tokens)
         .set({ discountDeletedAt: now.toISOString(), discountCleanupError: null })
         .where(eq(tokens.tokenId, row.tokenId))
-        .run();
+        ;
     }
   }
   logJson({ level: result.failed > 0 ? "warn" : "info", msg: "discount_cleanup", ...result });
