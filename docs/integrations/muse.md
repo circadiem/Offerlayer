@@ -14,7 +14,7 @@ what is specific to it. The general rules are in `protocol/CONNECTOR.md`.
 | --- | --- |
 | Meta connector developer program | Not applied yet (needs the Partner/legal entity decision) |
 | Offerlayer connector built from the API / MCP surface | Not started (Phase 3) |
-| Discount + attribution through Muse's Shop Pay checkout | **Unverified.** The checkout-path spike (launch plan §5.5) must answer this before Phase 2 work |
+| Discount + attribution through Muse's Shop Pay checkout | Desk research done (`docs/spikes/checkout-paths.md`): Shopify supports discount codes in Muse checkout; whether Muse forwards a connector-supplied code is **unverified** until a live test |
 
 Requirements and format for Meta connectors must be checked against Meta's
 current developer docs before building; the program was in developer preview

@@ -837,3 +837,60 @@ describe("§2.7 limits are enforced at checkout time", () => {
     expect(over.body.error.code).toBe("BUDGET_EXHAUSTED");
   });
 });
+
+describe("attribution by single-use discount code", () => {
+  async function mintedCheckout(h: Awaited<ReturnType<typeof harness>>, principal: string) {
+    const issued = await h.checkout({ offer_id: OFFER, principal_ref: principal });
+    const row = (
+      await h.handle.db.select().from(tokens).where(eq(tokens.rawJws, issued.body.token)).limit(1)
+    )[0];
+    return { token: issued.body.token as string, code: row?.discountCode as string };
+  }
+
+  it("attributes an order that carries only our discount code (no cart attributes)", async () => {
+    const h = track(await harness());
+    shopifyAdmin.fetch = fakeShopify().fetch;
+    await h.bindShop();
+    const { token, code } = await mintedCheckout(h, "code-only@example.com");
+    expect(code).toMatch(/^OL/);
+    const { body } = await h.webhook("orders/paid", {
+      id: 901,
+      total_price: "28.80",
+      currency: "USD",
+      discount_codes: [{ code: code.toLowerCase(), amount: "3.20", type: "percentage" }],
+    });
+    expect(body.conversion.status).toBe("pending_hold");
+    expect(body.conversion.token).toBe(token);
+  });
+
+  it("prefers the discount code over an agent_ref copied from another checkout", async () => {
+    const h = track(await harness());
+    shopifyAdmin.fetch = fakeShopify().fetch;
+    await h.bindShop();
+    const mine = await mintedCheckout(h, "mine@example.com");
+    const other = await mintedCheckout(h, "other@example.com");
+    const { body } = await h.webhook("orders/paid", {
+      id: 902,
+      total_price: "28.80",
+      currency: "USD",
+      note_attributes: [{ name: "agent_ref", value: other.token }],
+      discount_applications: [{ type: "discount_code", code: mine.code }],
+    });
+    expect(body.conversion.token).toBe(mine.token);
+    const otherConversion = await h.json(`/v1/conversions/${other.token}`, {
+      headers: { authorization: `Bearer ${h.keys.demoAgentKey}` },
+    });
+    expect(otherConversion.body.status).toBe("issued");
+  });
+
+  it("ignores an OL-prefixed code it did not mint", async () => {
+    const h = track(await harness());
+    const { body } = await h.webhook("orders/paid", {
+      id: 903,
+      total_price: "10.00",
+      currency: "USD",
+      discount_codes: [{ code: "OL000000000000" }],
+    });
+    expect(body.ignored).toBe(true);
+  });
+});

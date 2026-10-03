@@ -34,7 +34,7 @@
     "api": "tsx apps/api/src/index.ts",
     "mcp": "tsx apps/mcp/src/stdio.ts",
     "shopify": "tsx apps/shopify/server.ts",
-    "db:generate": "drizzle-kit generate --config packages/db/drizzle.config.ts",
+    "db:generate": "pnpm --dir packages/db exec drizzle-kit generate",
     "check:prod-boot": "tsx scripts/prod-boot-check.ts"
   },
   "dependencies": {

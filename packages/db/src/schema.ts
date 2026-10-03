@@ -149,6 +149,7 @@ export const tokens = pgTable(
     uniqueIndex("idx_tokens_nonce").on(t.nonce),
     uniqueIndex("idx_tokens_raw").on(t.rawJws),
     uniqueIndex("idx_tokens_discount_node").on(t.discountNodeId),
+    uniqueIndex("idx_tokens_discount_code").on(t.discountCode),
     index("idx_tokens_issued_by").on(t.issuedBy, t.createdAt),
     index("idx_tokens_offer_created").on(t.offerId, t.createdAt),
     index("idx_tokens_principal").on(t.principalHash),
