@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://offerlayer.dev/schema/offer-0.1.json",
+  "$id": "https://www.offerlayer.io/schema/offer-0.1.json",
   "title": "Offerlayer Offer",
   "type": "object",
   "additionalProperties": false,

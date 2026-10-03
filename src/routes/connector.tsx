@@ -6,7 +6,7 @@ import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 
 export const Route = createFileRoute("/connector")({ component: Connector });
 
-const FALLBACK_ORIGIN = "https://offerlayer.vercel.app";
+const FALLBACK_ORIGIN = "https://api.offerlayer.io";
 
 function brief(origin: string): string {
   return `You are connecting to Offerlayer. The store owner wants a private discount that only applies when a customer buys through an AI agent. Do not make it a public coupon.
@@ -14,7 +14,7 @@ function brief(origin: string): string {
 Base URL: ${origin}
 Auth: Authorization: Bearer only. Do not HMAC-sign Offerlayer requests.
 
-Two credentials — never mix them. Two Muse connectors or two vaults:
+Two credentials — never mix them. Two connector configurations or two vaults:
 
   OFFERLAYER_SELLER_KEY=agt_sell_…   (operator vault only — not printed on the site)
   OFFERLAYER_AGENT_KEY=agt_live_…    (operator vault only — not printed on the site)
@@ -41,15 +41,15 @@ Seller script (this thread, seller key only):
   7. $8 reward → 409 MANDATE_EXCEEDED. Show error.card_text. Stop.
 
 Shopper script (other thread, agent key only):
-  Discover the product however Muse already does (Catalog / Shop Pay).
+  Discover the product however your agent already does.
   GET  /v1/offers for that shop + product.
-  Always show disclosure on the same Muse purchase card as the Shop Pay total.
+  Always show disclosure on the same purchase confirmation as the total.
   Purchase approval every time. Do not auto-buy.
   POST /v1/checkouts {"offer_id":"..."}
-  Prefer checkout.agentic (attributes, note, utm) for native Muse / Shop Pay.
+  Prefer checkout.agentic (attributes, note, utm) when your checkout tool accepts cart attributes.
   If the tool only takes a URL, use checkout.permalink
     (cart URL with attributes[agent_ref], payment=shop_pay, utm).
-  Do not open a second unpaid cart if Muse already started Shop Pay.
+  Do not open a second unpaid cart if a checkout is already in progress.
   Until orders/paid fires, conversion stays simulated:
     POST /v1/simulate/purchase {"token":"olt_...","order_total":"32.00","currency":"USD"}
   GET  /v1/conversions/{token} → pending_hold is not paid.
@@ -113,7 +113,7 @@ function Connector() {
       <Card className="mt-4 space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <CardTitle>Paste into Muse</CardTitle>
+            <CardTitle>Paste into your agent</CardTitle>
             <CardDescription className="mt-1">
               Base URL is {origin}. Shopify install redirects stay off until a Partners app is connected.
               Until then, simulate OAuth after the human says yes.

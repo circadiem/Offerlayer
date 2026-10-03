@@ -39,7 +39,7 @@ export function SellerConsole() {
   const [me, setMe] = useState<SellerMe | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [origin, setOrigin] = useState("https://offerlayer.vercel.app");
+  const [origin, setOrigin] = useState("https://api.offerlayer.io");
 
   useEffect(() => {
     setOrigin(window.location.origin);

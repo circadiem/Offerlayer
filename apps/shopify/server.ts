@@ -38,9 +38,7 @@ app.get("/auth/login", (c) => {
   const shopRaw = c.req.query("shop") ?? "";
   const sellerLink = c.req.query("seller_link") ?? "";
   const configured = Boolean(env.shopifyApiKey);
-  const appUrl = (env.shopifyAppUrl || env.publicBaseUrl || "").replace(/\/$/, "");
-  const origin =
-    appUrl && !/localhost|127\.0\.0\.1/i.test(appUrl) ? appUrl : "https://offerlayer.grok.me";
+  const origin = env.shopifyAppUrl;
   const headers = new Headers();
   if (sellerLink) {
     headers.append(

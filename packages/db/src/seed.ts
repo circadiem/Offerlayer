@@ -11,6 +11,7 @@ export const SEED_MERCHANT_ID = "mer_demo_towels";
 export const SEED_AGENT_DEMO = "agt_demo";
 export const SEED_AGENT_MUSE = "agt_muse";
 export const SEED_AGENT_SELLER = "agt_seller";
+export const SEED_AGENT_SHOPPER = "agt_shopper";
 
 export const SEED_DISCLOSURE =
   "10% off this checkout of the Organic Turkish Towel Set. The code works once, on this cart only, and cannot be shared.";
@@ -58,16 +59,77 @@ export const SEED_OFFER = {
   disclosure: SEED_DISCLOSURE,
 };
 
-export async function seedDatabase(handle: DbHandle): Promise<{
+export type SeedKeys = {
+  shopperAgentKey: string;
+  sellerAgentKey: string;
+  /** Demo mode only (empty in production). */
   demoAgentKey: string;
   museAgentKey: string;
-  sellerAgentKey: string;
   demoKey: string;
-}> {
+};
+
+async function upsertAgent(
+  handle: DbHandle,
+  id: string,
+  name: string,
+  apiKey: string,
+  role: "shopper" | "seller",
+): Promise<void> {
+  if (!apiKey) throw new Error(`[offerlayer] no API key configured for seeded agent ${id}`);
+  const now = new Date().toISOString();
+  const apiKeyHash = hashApiKey(apiKey);
+  await handle.db
+    .insert(agents)
+    .values({ id, name, publicKey: null, apiKeyHash, status: "active", role, createdAt: now })
+    .onConflictDoUpdate({ target: agents.id, set: { apiKeyHash, name, status: "active", role } });
+}
+
+/**
+ * Bootstrap agents for this deploy: one shopper key and one seller key, from
+ * SHOPPER_AGENT_KEY / SELLER_AGENT_KEY. In demo mode, also the demo catalog
+ * (seedDemoData). Idempotent; runs on every boot.
+ */
+export async function seedDatabase(handle: DbHandle): Promise<SeedKeys> {
+  const { env } = handle;
+  await upsertAgent(
+    handle,
+    SEED_AGENT_SHOPPER,
+    "Default shopper agent",
+    env.shopperAgentKey,
+    "shopper",
+  );
+  await upsertAgent(
+    handle,
+    SEED_AGENT_SELLER,
+    "Default seller agent",
+    env.sellerAgentKey,
+    "seller",
+  );
+  if (env.demoMode) await seedDemoData(handle);
+  return {
+    shopperAgentKey: env.shopperAgentKey,
+    sellerAgentKey: env.sellerAgentKey,
+    demoAgentKey: env.demoAgentKey,
+    museAgentKey: env.museAgentKey,
+    demoKey: env.demoKey,
+  };
+}
+
+/**
+ * Demo-only data: the Demo Towels shop and offer, the default seller's grant
+ * on it, and two demo shopper agents (the playground's, and a stand-in for one
+ * named agent). Never runs in production; tests may call it directly.
+ */
+export async function seedDemoData(handle: DbHandle): Promise<void> {
   const now = new Date().toISOString();
   const { db, env } = handle;
+  if (env.demoAgentKey)
+    await upsertAgent(handle, SEED_AGENT_DEMO, "Demo agent", env.demoAgentKey, "shopper");
+  if (env.museAgentKey)
+    await upsertAgent(handle, SEED_AGENT_MUSE, "Muse (demo)", env.museAgentKey, "shopper");
 
-  await db.insert(merchants)
+  await db
+    .insert(merchants)
     .values({
       id: SEED_MERCHANT_ID,
       shopDomain: SEED_OFFER.merchant.shop_domain,
@@ -84,10 +146,10 @@ export async function seedDatabase(handle: DbHandle): Promise<{
         name: SEED_OFFER.merchant.name,
         website: SEED_OFFER.merchant.website,
       },
-    })
-    ;
+    });
 
-  await db.insert(offers)
+  await db
+    .insert(offers)
     .values({
       id: SEED_OFFER_ID,
       merchantId: SEED_MERCHANT_ID,
@@ -130,76 +192,25 @@ export async function seedDatabase(handle: DbHandle): Promise<{
         clawbackDays: SEED_OFFER.constraints.clawback_days,
         updatedAt: now,
       },
-    })
-    ;
+    });
 
-  for (const row of (await db.select().from(offers))) {
-    if (!row.disclosure?.includes("finder fee")) continue;
-    const disclosure =
-      row.id === SEED_OFFER_ID
-        ? SEED_DISCLOSURE
-        : row.disclosure.replace(/ ?Optional agent finder fee: [^.]+\./, "").replace(
-            / ?The presenting agent may earn a 2% finder fee on the paid total\./,
-            "",
-          );
-    await db.update(offers).set({ disclosure, updatedAt: now }).where(eq(offers.id, row.id));
-  }
-
-  const upsertAgent = async (id: string, name: string, apiKeyHash: string, role: "shopper" | "seller") => {
-    const existing = (await db.select().from(agents).where(eq(agents.id, id)).limit(1))[0];
-    if (existing) {
-      await db.update(agents)
-        .set({ apiKeyHash, name, status: "active", role })
-        .where(eq(agents.id, id))
-        ;
-    } else {
-      await db.insert(agents)
-        .values({
-          id,
-          name,
-          publicKey: null,
-          apiKeyHash,
-          status: "active",
-          role,
-          createdAt: now,
-        })
-        ;
-    }
-  };
-
-  await upsertAgent(SEED_AGENT_DEMO, "Demo Agent", hashApiKey(env.demoAgentKey), "shopper");
-  await upsertAgent(SEED_AGENT_MUSE, "Muse Demo", hashApiKey(env.museAgentKey), "shopper");
-  await upsertAgent(SEED_AGENT_SELLER, "Demo Seller", hashApiKey(env.sellerAgentKey), "seller");
-
-  const grantExisting = (await db
-    .select()
-    .from(shopGrants)
-    .where(eq(shopGrants.merchantId, SEED_MERCHANT_ID))
-    )
-    .find((g) => g.sellerAgentId === SEED_AGENT_SELLER);
+  const grantExisting = (
+    await db.select().from(shopGrants).where(eq(shopGrants.merchantId, SEED_MERCHANT_ID))
+  ).find((g) => g.sellerAgentId === SEED_AGENT_SELLER);
   if (grantExisting) {
-    await db.update(shopGrants)
+    await db
+      .update(shopGrants)
       .set({ status: "active" })
-      .where(eq(shopGrants.id, grantExisting.id))
-      ;
+      .where(eq(shopGrants.id, grantExisting.id));
   } else {
-    await db.insert(shopGrants)
-      .values({
-        id: "grn_demo_towels_seller",
-        merchantId: SEED_MERCHANT_ID,
-        sellerAgentId: SEED_AGENT_SELLER,
-        status: "active",
-        createdAt: now,
-      })
-      ;
+    await db.insert(shopGrants).values({
+      id: "grn_demo_towels_seller",
+      merchantId: SEED_MERCHANT_ID,
+      sellerAgentId: SEED_AGENT_SELLER,
+      status: "active",
+      createdAt: now,
+    });
   }
-
-  return {
-    demoAgentKey: env.demoAgentKey,
-    museAgentKey: env.museAgentKey,
-    sellerAgentKey: env.sellerAgentKey,
-    demoKey: env.demoKey,
-  };
 }
 
 async function main(): Promise<void> {
@@ -217,9 +228,10 @@ async function main(): Promise<void> {
         merchant: SEED_OFFER.merchant.shop_domain,
         offer: SEED_OFFER_ID,
         agents: {
+          agt_shopper: keys.shopperAgentKey,
+          agt_seller: keys.sellerAgentKey,
           agt_demo: keys.demoAgentKey,
           agt_muse: keys.museAgentKey,
-          agt_seller: keys.sellerAgentKey,
         },
         demo_key: keys.demoKey,
         note: "API keys are stored hashed. Plaintext is printed for local demo only.",

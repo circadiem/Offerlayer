@@ -5,8 +5,8 @@ import { VERSION } from "./version.ts";
 describe("production API middleware", () => {
   it("GET /health is 200 JSON without waiting on sqlite", async () => {
     const event = {
-      url: new URL("https://offerlayer.grok.me/health"),
-      req: new Request("https://offerlayer.grok.me/health"),
+      url: new URL("https://demo.example.com/health"),
+      req: new Request("https://demo.example.com/health"),
     };
     const res = (await offerlayerApi(event, async () => {
       throw new Error("should not fall through");
@@ -19,8 +19,8 @@ describe("production API middleware", () => {
 
   it("GET /v1/offers through middleware is 200 JSON", async () => {
     const event = {
-      url: new URL("https://offerlayer.grok.me/v1/offers?q=towel&ship_to=US"),
-      req: new Request("https://offerlayer.grok.me/v1/offers?q=towel&ship_to=US"),
+      url: new URL("https://demo.example.com/v1/offers?q=towel&ship_to=US"),
+      req: new Request("https://demo.example.com/v1/offers?q=towel&ship_to=US"),
     };
     const res = (await offerlayerApi(event, async () => {
       throw new Error("should not fall through");
@@ -33,8 +33,8 @@ describe("production API middleware", () => {
 
   it("POST /v1/seller/links through public Host rewrites off localhost", async () => {
     const event = {
-      url: new URL("https://offerlayer.grok.me/v1/seller/links"),
-      req: new Request("https://offerlayer.grok.me/v1/seller/links", {
+      url: new URL("https://demo.example.com/v1/seller/links"),
+      req: new Request("https://demo.example.com/v1/seller/links", {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -48,16 +48,16 @@ describe("production API middleware", () => {
     })) as Response;
     expect(res.status).toBe(201);
     const body = (await res.json()) as { install_url: string; demo_complete_url: string };
-    expect(body.install_url).toMatch(/^https:\/\/offerlayer\.grok\.me\/auth\/login/);
-    expect(body.demo_complete_url).toMatch(/^https:\/\/offerlayer\.grok\.me\/v1\/seller\/links\//);
+    expect(body.install_url).toMatch(/^https:\/\/demo\.example\.com\/auth\/login/);
+    expect(body.demo_complete_url).toMatch(/^https:\/\/demo\.example\.com\/v1\/seller\/links\//);
     expect(body.install_url).not.toContain("localhost");
     expect(body.demo_complete_url).not.toContain("127.0.0.1");
   });
 
   it("GET /auth/login through middleware is the install HTML", async () => {
     const event = {
-      url: new URL("https://offerlayer.grok.me/auth/login?seller_link=lnk_mw&shop=demo-towels.myshopify.com"),
-      req: new Request("https://offerlayer.grok.me/auth/login?seller_link=lnk_mw&shop=demo-towels.myshopify.com"),
+      url: new URL("https://demo.example.com/auth/login?seller_link=lnk_mw&shop=demo-towels.myshopify.com"),
+      req: new Request("https://demo.example.com/auth/login?seller_link=lnk_mw&shop=demo-towels.myshopify.com"),
     };
     const res = (await offerlayerApi(event, async () => {
       throw new Error("should not fall through");
@@ -66,6 +66,6 @@ describe("production API middleware", () => {
     const html = await res.text();
     expect(html).toContain("Approve this shop install");
     expect(html).toContain("lnk_mw");
-    expect(html).toContain("https://offerlayer.grok.me/v1/seller/links/lnk_mw/complete");
+    expect(html).toContain("https://demo.example.com/v1/seller/links/lnk_mw/complete");
   });
 });

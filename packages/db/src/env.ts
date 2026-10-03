@@ -43,16 +43,71 @@ export interface OfferlayerEnv {
   demoKey: string;
   shopifyApiKey: string;
   shopifyApiSecret: string;
+  /** Where the Shopify app is served (OAuth start, redirect). */
   shopifyAppUrl: string;
   shopifyScopes: string;
   internalApiKey: string;
+  /** Bootstrap shopper-agent key (until self-serve keys ship). */
+  shopperAgentKey: string;
+  /** Demo mode only; empty in production. */
   demoAgentKey: string;
+  /** Demo mode only; empty in production. */
   museAgentKey: string;
   sellerAgentKey: string;
-  publicBaseUrl: string;
+  urls: PublicUrls;
+  /** Bearer Vercel Cron sends to /v1/internal/jobs/*; empty = internal key only. */
+  cronSecret: string;
   /** True only when OFFERLAYER_DEMO=1. Demo-only defaults apply; never true in production. */
   demoMode: boolean;
   limits: CheckoutLimits;
+}
+
+/**
+ * The canonical public hosts. Everything handed to Shopify (OAuth redirect,
+ * webhook URLs) and to agents (install links, docs) is built from these, never
+ * from a request's Host header.
+ */
+export interface PublicUrls {
+  /** Marketing site and docs. */
+  site: string;
+  /** Public API and webhooks. */
+  api: string;
+  /** Remote MCP server. */
+  mcp: string;
+  /** Shopify app URL (defaults to the API host, which serves /auth/*). */
+  shopifyApp: string;
+}
+
+export const CANONICAL_URLS = {
+  site: "https://www.offerlayer.io",
+  api: "https://api.offerlayer.io",
+  mcp: "https://mcp.offerlayer.io",
+} as const;
+
+function cleanUrl(raw: string): string {
+  const v = raw.trim().replace(/\/+$/, "");
+  if (!v) return "";
+  return /^https?:\/\//i.test(v) ? v : `https://${v}`;
+}
+
+/**
+ * SITE_URL, API_URL, MCP_URL, SHOPIFY_APP_URL override the canonical hosts
+ * (e.g. for a staging deploy). Demo mode defaults to the local dev servers.
+ */
+function resolveUrls(get: (key: string, fallback?: string) => string, demoMode: boolean): PublicUrls {
+  const local = {
+    site: "http://127.0.0.1:8080",
+    api: `http://127.0.0.1:${get("OFFERLAYER_API_PORT") || "8787"}`,
+    mcp: `http://127.0.0.1:${get("OFFERLAYER_API_PORT") || "8787"}/mcp`,
+  };
+  const base = demoMode ? local : CANONICAL_URLS;
+  const api = cleanUrl(get("API_URL")) || base.api;
+  return {
+    site: cleanUrl(get("SITE_URL")) || base.site,
+    api,
+    mcp: cleanUrl(get("MCP_URL")) || base.mcp,
+    shopifyApp: cleanUrl(get("SHOPIFY_APP_URL")) || api,
+  };
 }
 
 export interface CheckoutLimits {
@@ -79,6 +134,7 @@ export const SEED_DEFAULTS = {
   demoKey: "offerlayer_demo_v0",
   shopifyApiSecret: "offerlayer_shopify_secret_v0",
   internalApiKey: "offerlayer_internal_v0",
+  shopperAgentKey: "agt_live_shopper_v0_offerlayer_seed",
   demoAgentKey: "agt_live_demo_v0_offerlayer_seed",
   museAgentKey: "agt_live_muse_v0_offerlayer_seed",
   sellerAgentKey: "agt_sell_demo_v0_offerlayer_seed",
@@ -89,7 +145,7 @@ export function isPostgresUrl(url: string): boolean {
 }
 
 export type DatabaseConfig =
-  | { kind: "postgres"; url: string; poolMax: number }
+  | { kind: "postgres"; url: string; poolMax: number; caCert: string | null }
   /** dataDir null = in memory. */
   | { kind: "pglite"; dataDir: string | null };
 
@@ -100,9 +156,9 @@ export type DatabaseConfig =
  * - memory:                          embedded Postgres in memory
  * - unset                            demo mode only: pglite:./data/pglite
  */
-function resolveDatabase(raw: string, demoMode: boolean, poolMax: number): DatabaseConfig {
+function resolveDatabase(raw: string, demoMode: boolean, poolMax: number, caCert: string): DatabaseConfig {
   const url = raw.trim();
-  if (isPostgresUrl(url)) return { kind: "postgres", url, poolMax };
+  if (isPostgresUrl(url)) return { kind: "postgres", url, poolMax, caCert: caCert.trim() || null };
   if (!demoMode) {
     throw new Error(
       "[offerlayer] refusing to boot: DATABASE_URL must be a postgres:// URL outside demo mode " +
@@ -134,8 +190,12 @@ function intEnv(get: (key: string, fallback?: string) => string, key: string, fa
 }
 
 export function loadEnv(overrides: Partial<Record<string, string>> = {}): OfferlayerEnv {
-  const get = (key: string, fallback = ""): string =>
-    overrides[key] ?? process.env[key] ?? fallback;
+  // An empty value counts as unset (a copied .env.example is full of
+  // `KEY=` lines). An override, even "", takes precedence over process.env.
+  const get = (key: string, fallback = ""): string => {
+    const value = key in overrides ? overrides[key] : process.env[key];
+    return value === undefined || value === "" ? fallback : value;
+  };
 
   const demoMode = get("OFFERLAYER_DEMO", "") === "1";
 
@@ -146,16 +206,19 @@ export function loadEnv(overrides: Partial<Record<string, string>> = {}): Offerl
   const requiredSecrets = [
     ...cryptoSecrets,
     "INTERNAL_API_KEY",
-    "DEMO_AGENT_KEY",
-    "MUSE_AGENT_KEY",
+    "SHOPPER_AGENT_KEY",
     "SELLER_AGENT_KEY",
   ];
   if (!demoMode) {
     const missing = requiredSecrets.filter((k) => !get(k));
     if (missing.length > 0) {
-      const legacy = get("TOKEN_SECRET")
-        ? " TOKEN_SECRET is no longer read; it was split into TOKEN_SIGNING_SECRET, ACCESS_TOKEN_ENCRYPTION_KEY and PRINCIPAL_HASH_SECRET."
-        : "";
+      const legacy =
+        (get("TOKEN_SECRET")
+          ? " TOKEN_SECRET is no longer read; it was split into TOKEN_SIGNING_SECRET, ACCESS_TOKEN_ENCRYPTION_KEY and PRINCIPAL_HASH_SECRET."
+          : "") +
+        (get("DEMO_AGENT_KEY") || get("MUSE_AGENT_KEY")
+          ? " DEMO_AGENT_KEY and MUSE_AGENT_KEY are demo-only now; the production shopper key is SHOPPER_AGENT_KEY."
+          : "");
       throw new Error(
         `[offerlayer] refusing to boot: ${missing.join(", ")} not set. ` +
           `Generate secrets with \`openssl rand -hex 32\` and set them in the environment, ` +
@@ -190,30 +253,19 @@ export function loadEnv(overrides: Partial<Record<string, string>> = {}): Offerl
     }
   }
 
-  const database = resolveDatabase(get("DATABASE_URL", ""), demoMode, intEnv(get, "DB_POOL_MAX", 5));
+  const database = resolveDatabase(
+    get("DATABASE_URL", ""),
+    demoMode,
+    intEnv(get, "DB_POOL_MAX", 5),
+    get("DATABASE_CA_CERT", ""),
+  );
+  const cronSecret = get("CRON_SECRET", "");
+  if (cronSecret && cronSecret.length < 16) {
+    throw new Error("[offerlayer] refusing to boot: CRON_SECRET must be 16+ characters when set.");
+  }
   const portRaw = get("OFFERLAYER_API_PORT") || (get("PORT") === "8080" ? "" : get("PORT"));
   const port = Number(portRaw || "8787");
-  const vercelHost = get("VERCEL_PROJECT_PRODUCTION_URL") || get("VERCEL_URL");
-  const onVercel = Boolean(get("VERCEL") || get("VERCEL_ENV"));
-  const appUrl = get("APP_URL");
-  let publicBaseUrl = get("PUBLIC_BASE_URL") || appUrl;
-  if (!publicBaseUrl || /127\.0\.0\.1|localhost|0\.0\.0\.0/i.test(publicBaseUrl)) {
-    if (appUrl && !/127\.0\.0\.1|localhost|0\.0\.0\.0/i.test(appUrl)) {
-      publicBaseUrl = appUrl;
-    } else if (vercelHost && !/127\.0\.0\.1|localhost/i.test(vercelHost)) {
-      publicBaseUrl = vercelHost.startsWith("http") ? vercelHost : `https://${vercelHost}`;
-    } else if (onVercel) {
-      publicBaseUrl = "https://offerlayer.grok.me";
-    } else {
-      publicBaseUrl = `http://127.0.0.1:${get("PORT", "8787")}`;
-    }
-  }
-  let shopifyAppUrl = get("SHOPIFY_APP_URL") || appUrl || "";
-  if (shopifyAppUrl && /127\.0\.0\.1|localhost|0\.0\.0\.0/i.test(shopifyAppUrl) && (onVercel || appUrl)) {
-    shopifyAppUrl = /127\.0\.0\.1|localhost|0\.0\.0\.0/i.test(appUrl)
-      ? publicBaseUrl
-      : appUrl || publicBaseUrl;
-  }
+  const urls = resolveUrls(get, demoMode);
   return {
     port,
     database,
@@ -229,13 +281,16 @@ export function loadEnv(overrides: Partial<Record<string, string>> = {}): Offerl
     demoKey: demoMode ? get("DEMO_KEY", SEED_DEFAULTS.demoKey) : "",
     shopifyApiKey: get("SHOPIFY_API_KEY", ""),
     shopifyApiSecret: get("SHOPIFY_API_SECRET", demoMode ? SEED_DEFAULTS.shopifyApiSecret : ""),
-    shopifyAppUrl,
+    shopifyAppUrl: urls.shopifyApp,
     shopifyScopes: get("SHOPIFY_SCOPES", "read_products,read_orders,write_discounts"),
     internalApiKey: get("INTERNAL_API_KEY", demoMode ? SEED_DEFAULTS.internalApiKey : ""),
-    demoAgentKey: get("DEMO_AGENT_KEY", demoMode ? SEED_DEFAULTS.demoAgentKey : ""),
-    museAgentKey: get("MUSE_AGENT_KEY", demoMode ? SEED_DEFAULTS.museAgentKey : ""),
+    shopperAgentKey: get("SHOPPER_AGENT_KEY", demoMode ? SEED_DEFAULTS.shopperAgentKey : ""),
+    // Demo-only agents (the demo playground and a stand-in for one named agent).
+    demoAgentKey: demoMode ? get("DEMO_AGENT_KEY", SEED_DEFAULTS.demoAgentKey) : "",
+    museAgentKey: demoMode ? get("MUSE_AGENT_KEY", SEED_DEFAULTS.museAgentKey) : "",
     sellerAgentKey: get("SELLER_AGENT_KEY", demoMode ? SEED_DEFAULTS.sellerAgentKey : ""),
-    publicBaseUrl,
+    urls,
+    cronSecret,
     demoMode,
     limits: {
       checkoutTtlSeconds: intEnv(get, "CHECKOUT_TTL_SECONDS", 30 * 60),

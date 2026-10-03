@@ -4,12 +4,14 @@ info:
   version: 0.3.0
   description: >
     Public protocol for merchant-published purchase offers that agents can
-    attach at checkout. Muse is a consumer of this API, not a special case.
+    attach at checkout.
     Seller agents (agt_sell_...) list shops and publish offers. Shopper agents
     (agt_live_...) attach tokens at checkout. Keys are single-role.
 servers:
+  - url: https://api.offerlayer.io
+    description: Production
   - url: http://localhost:8787
-    description: Local v0
+    description: Local (pnpm api)
 tags:
   - name: discovery
   - name: checkout

@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtractTablesWithRelations } from "drizzle-orm";
@@ -43,7 +43,7 @@ export async function openDatabase(env: OfferlayerEnv = loadEnv()): Promise<DbHa
       connectionString: env.database.url,
       max: env.database.poolMax,
       idleTimeoutMillis: 10_000,
-      ssl: pgSslConfig(env.database.url),
+      ssl: pgSslConfig(env.database.url, env.database.caCert),
     });
     const db = drizzle(pool, { schema }) as unknown as Database;
     return {
@@ -55,6 +55,15 @@ export async function openDatabase(env: OfferlayerEnv = loadEnv()): Promise<DbHa
     };
   }
 
+  // The bundled server (Vercel) ships neither the migrations nor PGlite's
+  // WASM assets, and a failed PGlite start kills the process. Fail clearly
+  // instead: a deployed host needs Postgres, even in demo mode.
+  if (!existsSync(join(MIGRATIONS_DIR, "meta/_journal.json"))) {
+    throw new Error(
+      "[offerlayer] the embedded database (PGlite) is not available in this build. " +
+        "Set DATABASE_URL to a postgres:// URL.",
+    );
+  }
   const { PGlite } = await import("@electric-sql/pglite");
   const dataDir = env.database.dataDir;
   if (dataDir) mkdirSync(dirname(dataDir), { recursive: true });
@@ -84,11 +93,11 @@ export async function migratePglite(handle: DbHandle): Promise<void> {
 }
 
 /** Apply pending migrations to a Postgres URL (build step; see scripts/db-migrate.ts). */
-export async function migratePostgres(url: string): Promise<void> {
+export async function migratePostgres(url: string, caCert?: string | null): Promise<void> {
   const pg = await import("pg");
   const { drizzle } = await import("drizzle-orm/node-postgres");
   const { migrate } = await import("drizzle-orm/node-postgres/migrator");
-  const pool = new pg.default.Pool({ connectionString: url, max: 1, ssl: pgSslConfig(url) });
+  const pool = new pg.default.Pool({ connectionString: url, max: 1, ssl: pgSslConfig(url, caCert) });
   try {
     await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_DIR });
   } finally {
