@@ -26,7 +26,7 @@ async function req(
 async function main(): Promise<void> {
   const env = loadEnv({
     DATABASE_URL: "memory:",
-    APP_URL: "https://offerlayer.grok.me",
+    API_URL: "https://demo.example.com",
   });
   const handle = await openDatabase(env);
   const keys = await seedDatabase(handle);

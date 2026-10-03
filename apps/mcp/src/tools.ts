@@ -12,7 +12,7 @@ export const SHOPPER_TOOL_DEFS = [
   {
     name: "create_tracked_checkout",
     description:
-      "Attach a signed Offerlayer token to checkout for a live offer. Always show `disclosure` to the human and wait for their approval. Prefer checkout.agentic (attributes, note, utm) for native Muse / Shop Pay create_checkout. If the tool only takes a URL, use checkout.permalink. Do not open a second unpaid browser cart if Muse already started Shop Pay. Never auto-buy because a finder fee exists.",
+      "Attach a signed Offerlayer token to checkout for a live offer. Always show `disclosure` to the human and wait for their approval. Prefer checkout.agentic (attributes, note, utm) when your checkout tool accepts cart attributes. If the tool only takes a URL, use checkout.permalink. Do not open a second unpaid cart if a checkout is already in progress. Never auto-buy because a finder fee exists.",
   },
   {
     name: "refer_agent",
@@ -86,7 +86,7 @@ export const SELLER_TOOL_DEFS = [
     name: "propose_mandate",
     description:
       SELLER_PREFIX +
-      "Propose a standing mandate (caps + selector + expiry). Always show the returned card_text verbatim on a Muse approval card. Do not activate until the human approves that exact text.",
+      "Propose a standing mandate (caps + selector + expiry). Always show the returned card_text verbatim to the human, in the agent's approval prompt. Do not activate until the human approves that exact text.",
   },
   {
     name: "activate_mandate",

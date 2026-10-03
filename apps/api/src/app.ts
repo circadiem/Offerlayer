@@ -28,7 +28,7 @@ import { cleanupExpiredDiscounts } from "./discount-cleanup.ts";
 import { registerSellerRoutes } from "./seller.ts";
 import { registerShopifyAuthRoutes } from "./shopify-auth.ts";
 import { VERSION } from "./version.ts";
-import { isLoopbackHost, requestPublicOrigin } from "./origin.ts";
+import { requestPublicOrigin } from "./origin.ts";
 
 function bearer(header: string | undefined): string | null {
   if (!header) return null;
@@ -189,9 +189,9 @@ export function createApp(handle: DbHandle) {
       role: seller.role,
       name: seller.name,
       shopify_oauth: Boolean(handle.env.shopifyApiKey),
-      app_url: isLoopbackHost(origin) ? "https://offerlayer.grok.me" : origin,
-      redirect_uri: `${isLoopbackHost(origin) ? "https://offerlayer.grok.me" : origin}/auth/callback`,
-      webhook_uri: `${isLoopbackHost(origin) ? "https://offerlayer.grok.me" : origin}/v1/webhooks/shopify`,
+      app_url: handle.env.shopifyAppUrl,
+      redirect_uri: `${origin}/auth/callback`,
+      webhook_uri: `${origin}/v1/webhooks/shopify`,
     });
   });
 
@@ -296,8 +296,8 @@ export function createApp(handle: DbHandle) {
   // Accepts the internal key, or CRON_SECRET as a bearer (what Vercel Cron sends).
   const runCleanup = async (c: { req: { header: (n: string) => string | undefined; raw?: object } }) => {
     const auth = bearer(c.req.header("authorization"));
-    const cron = process.env.CRON_SECRET;
-    if (!(cron && cron.length >= 16 && auth && timingEqual(auth, cron))) requireDemoOrInternal(c);
+    const cron = handle.env.cronSecret;
+    if (!(cron && auth && timingEqual(auth, cron))) requireDemoOrInternal(c);
     return cleanupExpiredDiscounts(handle);
   };
   app.get("/v1/internal/jobs/cleanup-discounts", async (c) => c.json(await runCleanup(c)));

@@ -1,56 +1,49 @@
 import { describe, expect, it } from "vitest";
-import { loadEnv } from "@offerlayer/db";
-import { PRODUCTION_ORIGIN, requestPublicOrigin, rewritePublicUrl } from "./origin.ts";
+import { CANONICAL_URLS, loadEnv } from "@offerlayer/db";
+import { requestPublicOrigin } from "./origin.ts";
 
 function headers(map: Record<string, string>) {
   return { header: (n: string) => map[n.toLowerCase()] };
 }
 
+const PROD = {
+  OFFERLAYER_DEMO: "",
+  DATABASE_URL: "postgres://prod-test.invalid/offerlayer",
+  TOKEN_SIGNING_SECRET: "s".repeat(40),
+  ACCESS_TOKEN_ENCRYPTION_KEY: "e".repeat(40),
+  PRINCIPAL_HASH_SECRET: "p".repeat(40),
+  INTERNAL_API_KEY: "i".repeat(20),
+  SHOPPER_AGENT_KEY: "d".repeat(20),
+  SELLER_AGENT_KEY: "k".repeat(20),
+};
+
 describe("requestPublicOrigin", () => {
-  const env = loadEnv({ DATABASE_URL: "memory:" });
-
-  it("uses x-forwarded-host over loopback env", async () => {
-    const origin = requestPublicOrigin(
-      headers({ "x-forwarded-host": "offerlayer.grok.me", "x-forwarded-proto": "https" }),
-      env,
-    );
-    expect(origin).toBe("https://offerlayer.grok.me");
-  });
-
-  it("rewrites stored localhost install URLs", async () => {
-    const next = rewritePublicUrl(
-      "http://localhost:3000/auth/login?seller_link=lnk_x",
-      PRODUCTION_ORIGIN,
-    );
-    expect(next).toBe("https://offerlayer.grok.me/auth/login?seller_link=lnk_x");
-    expect(next).not.toContain(":3000");
-  });
-
-  it("strips a stray port on an already-public install URL", async () => {
-    const next = rewritePublicUrl(
-      "https://offerlayer.grok.me:3000/auth/login?seller_link=lnk_x",
-      PRODUCTION_ORIGIN,
-    );
-    expect(next).toBe("https://offerlayer.grok.me/auth/login?seller_link=lnk_x");
-  });
-
-  it("strips stray ports from public hosts", async () => {
-    const origin = requestPublicOrigin(
-      headers({ host: "offerlayer.grok.me:3000", "x-forwarded-proto": "https" }),
-      env,
-    );
-    expect(origin).toBe("https://offerlayer.grok.me");
-  });
-
-  it("on Vercel without Host falls back to offerlayer.grok.me", async () => {
-    const prev = process.env.VERCEL;
-    process.env.VERCEL = "1";
-    try {
-      const origin = requestPublicOrigin(headers({}), env);
-      expect(origin).toBe(PRODUCTION_ORIGIN);
-    } finally {
-      if (prev === undefined) delete process.env.VERCEL;
-      else process.env.VERCEL = prev;
+  it("in production always returns the configured API URL, whatever the Host", async () => {
+    const env = loadEnv(PROD);
+    expect(env.urls).toMatchObject(CANONICAL_URLS);
+    for (const host of ["offerlayer-abc123.vercel.app", "evil.example.com", "127.0.0.1:8787"]) {
+      expect(requestPublicOrigin(headers({ host, "x-forwarded-host": host }), env)).toBe(
+        "https://api.offerlayer.io",
+      );
     }
+  });
+
+  it("honors API_URL overrides for staging", async () => {
+    const env = loadEnv({ ...PROD, API_URL: "staging-api.offerlayer.io/" });
+    expect(requestPublicOrigin(headers({ host: "x.vercel.app" }), env)).toBe("https://staging-api.offerlayer.io");
+    expect(env.shopifyAppUrl).toBe("https://staging-api.offerlayer.io");
+  });
+
+  it("in demo mode follows a public Host and strips stray ports", async () => {
+    const env = loadEnv({ DATABASE_URL: "memory:" });
+    expect(
+      requestPublicOrigin(headers({ "x-forwarded-host": "demo.example.com", "x-forwarded-proto": "https" }), env),
+    ).toBe("https://demo.example.com");
+    expect(requestPublicOrigin(headers({ host: "demo.example.com:3000" }), env)).toBe("https://demo.example.com");
+  });
+
+  it("in demo mode on loopback uses the local API URL", async () => {
+    const env = loadEnv({ DATABASE_URL: "memory:" });
+    expect(requestPublicOrigin(headers({ host: "127.0.0.1:8787" }), env)).toBe("http://127.0.0.1:8787");
   });
 });

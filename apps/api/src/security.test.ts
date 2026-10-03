@@ -14,6 +14,7 @@ import {
   openTestDatabase,
   pgSslConfig,
   seedDatabase,
+  seedDemoData,
   tokens,
   withEnv,
   type DbHandle,
@@ -35,8 +36,7 @@ const PROD_SECRETS = {
   ACCESS_TOKEN_ENCRYPTION_KEY: "enc_" + "2".repeat(40),
   PRINCIPAL_HASH_SECRET: "prn_" + "3".repeat(40),
   INTERNAL_API_KEY: "int_" + "4".repeat(28),
-  DEMO_AGENT_KEY: "agt_live_" + "5".repeat(28),
-  MUSE_AGENT_KEY: "agt_live_" + "6".repeat(28),
+  SHOPPER_AGENT_KEY: "agt_live_" + "5".repeat(28),
   SELLER_AGENT_KEY: "agt_sell_" + "7".repeat(28),
   SHOPIFY_API_KEY: "shopify_key",
   SHOPIFY_API_SECRET: "shpss_" + "8".repeat(28),
@@ -83,6 +83,8 @@ async function harness(overrides: Record<string, string> = {}, shared?: DbHandle
   const env = loadEnv({ DATABASE_URL: "memory:", ...overrides });
   const handle = shared ? withEnv(shared, env) : await openTestDatabase(env);
   const keys = await seedDatabase(handle);
+  // Production boots without demo data; these tests still need a shop to sell.
+  if (!env.demoMode) await seedDemoData(handle);
   const app = createApp(handle);
   const json = async (path: string, init: RequestInit = {}) => {
     const res = await app.request(path, init);
@@ -158,7 +160,7 @@ describe("§2.1 demo and internal routes are unreachable in production", () => {
         method,
         headers: {
           "content-type": "application/json",
-          authorization: `Bearer ${PROD_SECRETS.DEMO_AGENT_KEY}`,
+          authorization: `Bearer ${PROD_SECRETS.SHOPPER_AGENT_KEY}`,
           "x-internal-key": PROD_SECRETS.INTERNAL_API_KEY,
         },
         body:
@@ -173,13 +175,13 @@ describe("§2.1 demo and internal routes are unreachable in production", () => {
 
   it("a shopper key cannot fabricate a paid conversion", async () => {
     const h = track(await harness(PROD_SECRETS));
-    const issued = await h.checkout({ offer_id: OFFER }, PROD_SECRETS.DEMO_AGENT_KEY);
+    const issued = await h.checkout({ offer_id: OFFER }, PROD_SECRETS.SHOPPER_AGENT_KEY);
     expect(issued.res.status).toBe(201);
     const fake = await h.json("/v1/simulate/purchase", {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${PROD_SECRETS.DEMO_AGENT_KEY}`,
+        authorization: `Bearer ${PROD_SECRETS.SHOPPER_AGENT_KEY}`,
       },
       body: JSON.stringify({ token: issued.body.token, order_total: "9999.00", currency: "USD" }),
     });
@@ -224,6 +226,16 @@ describe("§2.1 demo and internal routes are unreachable in production", () => {
     });
     expect(done.res.status).toBe(403);
     expect(done.body.error.code).toBe("OAUTH_REQUIRED");
+  });
+
+  it("a production boot seeds no demo shop, offer, or demo agents", async () => {
+    const env = loadEnv(PROD_SECRETS);
+    const handle = await openTestDatabase(env);
+    await seedDatabase(handle);
+    expect(await handle.raw("SELECT id FROM offers")).toEqual([]);
+    expect(await handle.raw("SELECT id FROM merchants")).toEqual([]);
+    const agentIds = (await handle.raw("SELECT id FROM agents ORDER BY id")).map((r) => r.id);
+    expect(agentIds).toEqual(["agt_seller", "agt_shopper"]);
   });
 
   it("demo mode still serves the simulate routes", async () => {
@@ -461,7 +473,7 @@ describe("§2.4 rotation", () => {
     const oldKeys = { ...PROD_SECRETS };
     const before = track(await harness(oldKeys));
     await before.bindShop();
-    const issued = await before.checkout({ offer_id: OFFER }, PROD_SECRETS.DEMO_AGENT_KEY);
+    const issued = await before.checkout({ offer_id: OFFER }, PROD_SECRETS.SHOPPER_AGENT_KEY);
 
     const rotated = {
       ...oldKeys,
@@ -479,7 +491,7 @@ describe("§2.4 rotation", () => {
       (
         await after.checkout(
           { offer_id: OFFER, principal_ref: "r@example.com" },
-          PROD_SECRETS.DEMO_AGENT_KEY,
+          PROD_SECRETS.SHOPPER_AGENT_KEY,
         )
       ).res.status,
     ).toBe(201);

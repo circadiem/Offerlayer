@@ -17,5 +17,5 @@ if (!isPostgresUrl(url)) {
   process.exit(0);
 }
 const started = Date.now();
-await migratePostgres(url);
+await migratePostgres(url, process.env.DATABASE_CA_CERT);
 console.log(`[db:migrate] migrations applied in ${Date.now() - started}ms`);

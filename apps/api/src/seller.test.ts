@@ -131,33 +131,14 @@ describe("offerlayer v0.1 seller", () => {
   it("public Host rewrites install_url off localhost", async () => {
     const { res, body } = await json("/v1/seller/links", {
       method: "POST",
-      headers: { ...sellerHeaders(), host: "offerlayer.grok.me", "x-forwarded-proto": "https" },
+      headers: { ...sellerHeaders(), host: "demo.example.com", "x-forwarded-proto": "https" },
       body: JSON.stringify({ shop_domain: "demo-towels.myshopify.com" }),
     });
     expect(res.status).toBe(201);
-    expect(body.install_url).toMatch(/^https:\/\/offerlayer\.grok\.me\/auth\/login/);
-    expect(body.demo_complete_url).toMatch(/^https:\/\/offerlayer\.grok\.me\/v1\/seller\/links\//);
+    expect(body.install_url).toMatch(/^https:\/\/demo\.example\.com\/auth\/login/);
+    expect(body.demo_complete_url).toMatch(/^https:\/\/demo\.example\.com\/v1\/seller\/links\//);
     expect(body.install_url).not.toContain("localhost");
     expect(body.demo_complete_url).not.toContain("127.0.0.1");
-  });
-
-  it("VERCEL without Host still emits grok.me install URLs", async () => {
-    const prev = process.env.VERCEL;
-    process.env.VERCEL = "1";
-    try {
-      const { res, body } = await json("/v1/seller/links", {
-        method: "POST",
-        headers: sellerHeaders(),
-        body: JSON.stringify({ shop_domain: "demo-towels.myshopify.com" }),
-      });
-      expect(res.status).toBe(201);
-      expect(body.install_url).toMatch(/^https:\/\/offerlayer\.grok\.me\/auth\/login/);
-      expect(body.demo_complete_url).toMatch(/^https:\/\/offerlayer\.grok\.me\/v1\/seller\/links\//);
-      expect(body.install_url).not.toContain("localhost");
-    } finally {
-      if (prev === undefined) delete process.env.VERCEL;
-      else process.env.VERCEL = prev;
-    }
   });
 
   it("GET /auth/login is the human install page", async () => {

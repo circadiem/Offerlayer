@@ -30,7 +30,7 @@ describe("real Shopify OAuth + catalog", () => {
       DATABASE_URL: "memory:",
       SHOPIFY_API_KEY: "shpkey_test",
       SHOPIFY_API_SECRET: "shopify_oauth_secret_v0_test",
-      APP_URL: "https://offerlayer.grok.me",
+      API_URL: "https://demo.example.com",
     });
     handle = await openTestDatabase(env);
     const keys = await seedDatabase(handle);
@@ -120,13 +120,13 @@ describe("real Shopify OAuth + catalog", () => {
     });
     const linkId = created.body.pending_link_id as string;
     const res = await app.request(`/auth/login?shop=${REAL_SHOP}&seller_link=${linkId}`, {
-      headers: { host: "offerlayer.grok.me", "x-forwarded-proto": "https" },
+      headers: { host: "demo.example.com", "x-forwarded-proto": "https" },
     });
     expect(res.status).toBe(302);
     const location = res.headers.get("location") ?? "";
     expect(location).toContain(`https://${REAL_SHOP}/admin/oauth/authorize`);
     expect(location).toContain("client_id=shpkey_test");
-    expect(location).toContain(encodeURIComponent("https://offerlayer.grok.me/auth/callback"));
+    expect(location).toContain(encodeURIComponent("https://demo.example.com/auth/callback"));
     expect(location).not.toContain("localhost");
     expect(res.headers.get("set-cookie") ?? "").toContain(linkId);
   });
@@ -159,7 +159,7 @@ describe("real Shopify OAuth + catalog", () => {
     query.hmac = signOAuthQuery(query, shopSecret);
     const qs = new URLSearchParams(query).toString();
     const res = await app.request(`/auth/callback?${qs}`, {
-      headers: { host: "offerlayer.grok.me", "x-forwarded-proto": "https" },
+      headers: { host: "demo.example.com", "x-forwarded-proto": "https" },
     });
     expect(res.status).toBe(200);
     const html = await res.text();

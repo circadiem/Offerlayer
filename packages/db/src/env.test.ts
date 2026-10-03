@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { isPostgresUrl, loadEnv, REPO_ROOT } from "./env.ts";
 import { openTestDatabase } from "./testing.ts";
@@ -14,6 +16,7 @@ describe("database configuration", () => {
       kind: "postgres",
       url: "postgresql://u:p@aws-0.pooler.supabase.com:6543/postgres",
       poolMax: 5,
+      caCert: null,
     });
     expect(loadEnv({ DATABASE_URL: "postgres://h/db", DB_POOL_MAX: "2" }).database).toMatchObject({ poolMax: 2 });
   });
@@ -31,16 +34,37 @@ describe("database configuration", () => {
     expect(() => loadEnv({ DATABASE_URL: "file:./data/dev.db" })).toThrow(/SQLite\) is no longer supported/);
   });
 
-  it("APP_URL is the public Shopify origin and never stays localhost", async () => {
-    const env = loadEnv({
-      APP_URL: "https://offerlayer.grok.me",
-      SHOPIFY_APP_URL: "http://localhost:3000",
-      PUBLIC_BASE_URL: "http://127.0.0.1:8787",
-      VERCEL: "1",
-    });
-    expect(env.publicBaseUrl).toBe("https://offerlayer.grok.me");
-    expect(env.shopifyAppUrl).toBe("https://offerlayer.grok.me");
-    expect(env.shopifyAppUrl).not.toMatch(/localhost/);
+  it("public URLs default to the canonical domains in production and loopback in demo", async () => {
+    const demo = loadEnv({ DATABASE_URL: "memory:" });
+    expect(demo.urls.api).toBe("http://127.0.0.1:8787");
+    expect(demo.shopifyAppUrl).toBe("http://127.0.0.1:8787");
+    const custom = loadEnv({ DATABASE_URL: "memory:", SITE_URL: "https://example.test/", MCP_URL: "mcp.example.test" });
+    expect(custom.urls.site).toBe("https://example.test");
+    expect(custom.urls.mcp).toBe("https://mcp.example.test");
+  });
+});
+
+describe(".env.example", () => {
+  it("boots demo mode when copied verbatim with OFFERLAYER_DEMO=1", async () => {
+    const example = readFileSync(join(REPO_ROOT, ".env.example"), "utf8");
+    const vars = Object.fromEntries([...example.matchAll(/^([A-Z0-9_]+)=(.*)$/gm)].map((m) => [m[1], m[2]]));
+    const env = loadEnv({ ...vars, OFFERLAYER_DEMO: "1", DATABASE_URL: "memory:" });
+    const keys = [env.shopperAgentKey, env.sellerAgentKey, env.demoAgentKey, env.museAgentKey];
+    expect(keys.every((k) => k.length >= 16)).toBe(true);
+    expect(new Set(keys).size).toBe(keys.length);
+    const handle = await openTestDatabase(env);
+    await expect(seedDatabase(handle)).resolves.toBeDefined();
+  });
+
+  it("documents every variable loadEnv reads", async () => {
+    const source = readFileSync(join(REPO_ROOT, "packages/db/src/env.ts"), "utf8");
+    const read = new Set([...source.matchAll(/(?:get|intEnv)\((?:get, )?"([A-Z0-9_]+)"/g)].map((m) => m[1]));
+    read.delete("TOKEN_SECRET"); // legacy: only read to explain the rename
+    read.delete("PORT"); // documented in prose next to OFFERLAYER_API_PORT
+    const example = readFileSync(join(REPO_ROOT, ".env.example"), "utf8");
+    const documented = new Set([...example.matchAll(/^([A-Z0-9_]+)=/gm)].map((m) => m[1]));
+    const missing = [...read].filter((k) => !documented.has(k));
+    expect(missing).toEqual([]);
   });
 });
 
@@ -72,8 +96,7 @@ describe("demo mode vs production secrets", () => {
     ACCESS_TOKEN_ENCRYPTION_KEY: "enc_" + "g".repeat(40),
     PRINCIPAL_HASH_SECRET: "prn_" + "h".repeat(40),
     INTERNAL_API_KEY: "int_" + "b".repeat(28),
-    DEMO_AGENT_KEY: "agt_" + "d".repeat(28),
-    MUSE_AGENT_KEY: "agt_" + "e".repeat(28),
+    SHOPPER_AGENT_KEY: "agt_" + "d".repeat(28),
     SELLER_AGENT_KEY: "agt_" + "f".repeat(28),
   };
 

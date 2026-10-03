@@ -95,7 +95,7 @@ async function boot(): Promise<Booted> {
     msg: "offerlayer_boot",
     database: env.database.kind,
     demo: env.demoMode,
-    public_base: env.publicBaseUrl,
+    api_url: env.urls.api,
   });
   const handle = await db.openDatabase(env);
   await db.seedDatabase(handle);
