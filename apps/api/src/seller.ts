@@ -73,12 +73,13 @@ function tryNormalizeShop(raw: string | undefined | null): string | null {
   }
 }
 
-function linkUrls(origin: string, linkId: string, shop: string | null) {
+function linkUrls(origin: string, linkId: string, shop: string | null, demoMode: boolean) {
   const qs = new URLSearchParams({ seller_link: linkId });
   if (shop) qs.set("shop", shop);
   return {
     install_url: `${origin}/auth/login?${qs.toString()}`,
-    demo_complete_url: `${origin}/v1/seller/links/${linkId}/complete`,
+    // Completing a link without Shopify OAuth is a demo affordance only.
+    demo_complete_url: demoMode ? `${origin}/v1/seller/links/${linkId}/complete` : undefined,
   };
 }
 
@@ -194,7 +195,7 @@ export function completeLink(
   if (!link) throw jsonError("LINK_NOT_FOUND", "Seller link not found", 404);
   const shop = tryNormalizeShop(shopRaw) ?? shopRaw;
   const accessTokenEnc = extra.accessToken
-    ? encryptAccessToken(extra.accessToken, handle.env.tokenSecret)
+    ? encryptAccessToken(extra.accessToken, handle.env.accessTokenEncryptionKey)
     : undefined;
   const catalogJson = extra.catalog ? JSON.stringify(extra.catalog) : undefined;
   const merchant = upsertMerchant(handle, shop, {
@@ -278,7 +279,7 @@ export function registerSellerRoutes(app: Hono, handle: DbHandle, auth: AuthFns)
     const now = new Date();
     const id = newId("lnk_");
     const origin = requestPublicOrigin(c.req, handle.env);
-    const urls = linkUrls(origin, id, shop);
+    const urls = linkUrls(origin, id, shop, handle.env.demoMode);
     const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
     handle.db
       .insert(sellerLinks)
@@ -316,7 +317,7 @@ export function registerSellerRoutes(app: Hono, handle: DbHandle, auth: AuthFns)
       throw jsonError("LINK_NOT_FOUND", "Seller link not found", 404);
     }
     const origin = requestPublicOrigin(c.req, handle.env);
-    const urls = linkUrls(origin, link.id, link.shopDomain);
+    const urls = linkUrls(origin, link.id, link.shopDomain, handle.env.demoMode);
     return c.json({
       pending_link_id: link.id,
       status: link.status,
@@ -335,6 +336,13 @@ export function registerSellerRoutes(app: Hono, handle: DbHandle, auth: AuthFns)
     const body = sellerCompleteLinkSchema.parse(await c.req.json());
     const link = handle.db.select().from(sellerLinks).where(eq(sellerLinks.id, id)).get();
     if (!link) throw jsonError("LINK_NOT_FOUND", "Seller link not found", 404);
+    // Outside demo mode a seller key cannot bind a shop by itself: that
+    // would let any seller claim any shop domain without the merchant's
+    // Shopify approval. Production links complete through /auth/callback;
+    // the operator's internal key remains as a support escape hatch.
+    if (actor.role === "seller" && !handle.env.demoMode) {
+      throw jsonError("OAUTH_REQUIRED", "Shops are connected through Shopify install, not this endpoint", 403);
+    }
     if (actor.role === "seller" && actor.id !== link.sellerAgentId) {
       throw jsonError("FORBIDDEN", "Only the creating seller can complete this link", 403);
     }
@@ -371,7 +379,7 @@ export function registerSellerRoutes(app: Hono, handle: DbHandle, auth: AuthFns)
     requireGrant(handle, seller.id, merchant.id);
     if (merchant.accessTokenEnc) {
       try {
-        const token = decryptAccessToken(merchant.accessTokenEnc, handle.env.tokenSecret);
+        const token = decryptAccessToken(merchant.accessTokenEnc, handle.env.accessTokenEncryptionKey, handle.env.accessTokenEncryptionKeyPrevious);
         const products = await fetchShopProducts({ shop: merchant.shopDomain, accessToken: token });
         if (products.length > 0) {
           return c.json({ oauth: true, products });
@@ -396,7 +404,7 @@ export function registerSellerRoutes(app: Hono, handle: DbHandle, auth: AuthFns)
     if (!merchant.accessTokenEnc) {
       throw jsonError("OAUTH_REQUIRED", "This shop has no Shopify token", 409);
     }
-    const token = decryptAccessToken(merchant.accessTokenEnc, handle.env.tokenSecret);
+    const token = decryptAccessToken(merchant.accessTokenEnc, handle.env.accessTokenEncryptionKey, handle.env.accessTokenEncryptionKeyPrevious);
     const origin = requestPublicOrigin(c.req, handle.env);
     const webhookUri = `${origin}/v1/webhooks/shopify`;
     const hooks = await registerWebhooks({
@@ -407,6 +415,11 @@ export function registerSellerRoutes(app: Hono, handle: DbHandle, auth: AuthFns)
     return c.json({ shop_domain: merchant.shopDomain, webhook_uri: webhookUri, webhooks: hooks });
   });
 
+  if (handle.env.demoMode) registerSimulateRoutes(app, handle, auth);
+  registerSellerOfferRoutes(app, handle, auth);
+}
+
+function registerSimulateRoutes(app: Hono, handle: DbHandle, auth: AuthFns) {
   app.post("/v1/simulate/connect_shop", async (c) => {
     const seller = await auth.requireDemoAndSeller(c);
     const body = simulateConnectShopSchema.parse(await c.req.json().catch(() => ({})));
@@ -414,7 +427,7 @@ export function registerSellerRoutes(app: Hono, handle: DbHandle, auth: AuthFns)
     const now = new Date();
     const id = newId("lnk_");
     const origin = requestPublicOrigin(c.req, handle.env);
-    const urls = linkUrls(origin, id, shop);
+    const urls = linkUrls(origin, id, shop, handle.env.demoMode);
     handle.db
       .insert(sellerLinks)
       .values({
@@ -448,7 +461,7 @@ export function registerSellerRoutes(app: Hono, handle: DbHandle, auth: AuthFns)
     const existing = handle.db.select().from(sellerLinks).where(eq(sellerLinks.id, id)).get();
     if (!existing) {
       const origin = requestPublicOrigin(c.req, handle.env);
-      const urls = linkUrls(origin, id, shop);
+      const urls = linkUrls(origin, id, shop, handle.env.demoMode);
       handle.db
         .insert(sellerLinks)
         .values({
@@ -480,6 +493,9 @@ export function registerSellerRoutes(app: Hono, handle: DbHandle, auth: AuthFns)
     );
   });
 
+}
+
+function registerSellerOfferRoutes(app: Hono, handle: DbHandle, auth: AuthFns) {
   app.post("/v1/seller/offers", async (c) => {
     const seller = await auth.requireSeller(c);
     const body = sellerCreateOfferSchema.parse(await c.req.json());

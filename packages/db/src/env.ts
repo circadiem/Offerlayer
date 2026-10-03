@@ -33,7 +33,15 @@ export interface OfferlayerEnv {
   port: number;
   databaseUrl: string;
   databasePath: string;
-  tokenSecret: string;
+  /** Signs checkout tokens (HMAC). */
+  tokenSigningSecret: string;
+  /** AES-256-GCM key material for stored Shopify access tokens. */
+  accessTokenEncryptionKey: string;
+  /** HMAC key for shopper identifiers (principal_ref, order emails). */
+  principalHashSecret: string;
+  /** Old values still accepted for verify/decrypt during a rotation (docs/SECRETS.md). */
+  tokenSigningSecretPrevious: string;
+  accessTokenEncryptionKeyPrevious: string;
   demoKey: string;
   shopifyApiKey: string;
   shopifyApiSecret: string;
@@ -47,6 +55,19 @@ export interface OfferlayerEnv {
   durablePostgres: boolean;
   /** True only when OFFERLAYER_DEMO=1. Demo-only defaults apply; never true in production. */
   demoMode: boolean;
+  limits: CheckoutLimits;
+}
+
+export interface CheckoutLimits {
+  /** Lifetime of a checkout token and its Shopify discount code. */
+  checkoutTtlSeconds: number;
+  /** Default per-agent-key checkout rate limits (overridable per key). */
+  checkoutsPerMinute: number;
+  checkoutsPerDay: number;
+  /** Checkouts without a principal_ref, per offer per UTC day. */
+  anonCheckoutsPerOfferPerDay: number;
+  /** Unused, unexpired checkout tokens allowed per offer at once. */
+  maxOutstandingPerOffer: number;
 }
 
 /**
@@ -55,7 +76,9 @@ export interface OfferlayerEnv {
  * loadEnv() refuses to use them unless OFFERLAYER_DEMO=1.
  */
 export const SEED_DEFAULTS = {
-  tokenSecret: "offerlayer_token_secret_v0_change_me_32b",
+  tokenSigningSecret: "offerlayer_demo_token_signing_secret_v0",
+  accessTokenEncryptionKey: "offerlayer_demo_access_token_encryption_v0",
+  principalHashSecret: "offerlayer_demo_principal_hash_secret_v0",
   demoKey: "offerlayer_demo_v0",
   shopifyApiSecret: "offerlayer_shopify_secret_v0",
   internalApiKey: "offerlayer_internal_v0",
@@ -104,6 +127,16 @@ function resolveDbPath(databaseUrl: string): string {
   return resolved;
 }
 
+function intEnv(get: (key: string, fallback?: string) => string, key: string, fallback: number): number {
+  const raw = get(key, "");
+  if (!raw) return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new Error(`[offerlayer] refusing to boot: ${key} must be a positive integer, got ${JSON.stringify(raw)}.`);
+  }
+  return n;
+}
+
 export function loadEnv(overrides: Partial<Record<string, string>> = {}): OfferlayerEnv {
   const get = (key: string, fallback = ""): string =>
     overrides[key] ?? process.env[key] ?? fallback;
@@ -111,13 +144,12 @@ export function loadEnv(overrides: Partial<Record<string, string>> = {}): Offerl
   const demoMode = get("OFFERLAYER_DEMO", "") === "1";
 
   // Fail closed: the SEED_DEFAULTS values are public (README, connector
-  // brief), so a non-demo host must never boot with them. TOKEN_SECRET signs
-  // checkout tokens, INTERNAL_API_KEY guards /v1/internal/*, and the agent
-  // keys authenticate API callers — all must be operator-chosen per deploy.
+  // brief), so a non-demo host must never boot with them. Each secret has one
+  // job so a leak or rotation of one does not compromise the others.
+  const cryptoSecrets = ["TOKEN_SIGNING_SECRET", "ACCESS_TOKEN_ENCRYPTION_KEY", "PRINCIPAL_HASH_SECRET"];
   const requiredSecrets = [
-    "TOKEN_SECRET",
+    ...cryptoSecrets,
     "INTERNAL_API_KEY",
-    "DEMO_KEY",
     "DEMO_AGENT_KEY",
     "MUSE_AGENT_KEY",
     "SELLER_AGENT_KEY",
@@ -125,17 +157,34 @@ export function loadEnv(overrides: Partial<Record<string, string>> = {}): Offerl
   if (!demoMode) {
     const missing = requiredSecrets.filter((k) => !get(k));
     if (missing.length > 0) {
+      const legacy = get("TOKEN_SECRET")
+        ? " TOKEN_SECRET is no longer read; it was split into TOKEN_SIGNING_SECRET, ACCESS_TOKEN_ENCRYPTION_KEY and PRINCIPAL_HASH_SECRET."
+        : "";
       throw new Error(
         `[offerlayer] refusing to boot: ${missing.join(", ")} not set. ` +
           `Generate secrets with \`openssl rand -hex 32\` and set them in the environment, ` +
-          `or run with OFFERLAYER_DEMO=1 for local demo mode (public demo keys only).`,
+          `or run with OFFERLAYER_DEMO=1 for local demo mode (public demo keys only).${legacy}`,
       );
     }
-    const short = requiredSecrets.filter((k) => get(k).length < 16);
+    const short = requiredSecrets.filter((k) => get(k).length < (cryptoSecrets.includes(k) ? 32 : 16));
     if (short.length > 0) {
       throw new Error(
-        `[offerlayer] refusing to boot: ${short.join(", ")} shorter than 16 characters.`,
+        `[offerlayer] refusing to boot: ${short.join(", ")} too short (crypto secrets need 32+ characters, keys 16+).`,
       );
+    }
+    for (let i = 0; i < requiredSecrets.length; i++) {
+      for (let j = i + 1; j < requiredSecrets.length; j++) {
+        if (get(requiredSecrets[i]) === get(requiredSecrets[j])) {
+          throw new Error(
+            `[offerlayer] refusing to boot: ${requiredSecrets[i]} and ${requiredSecrets[j]} must be different values.`,
+          );
+        }
+      }
+    }
+    const publicDefaults = new Set<string>(Object.values(SEED_DEFAULTS));
+    const reused = requiredSecrets.filter((k) => publicDefaults.has(get(k)));
+    if (reused.length > 0) {
+      throw new Error(`[offerlayer] refusing to boot: ${reused.join(", ")} uses a public demo value.`);
     }
     // A forged Shopify webhook can fake orders/paid -> fake conversions.
     if (get("SHOPIFY_API_KEY") && !get("SHOPIFY_API_SECRET")) {
@@ -148,7 +197,6 @@ export function loadEnv(overrides: Partial<Record<string, string>> = {}): Offerl
   const databaseUrl = get("DATABASE_URL", "file:./data/dev.db");
   const portRaw = get("OFFERLAYER_API_PORT") || (get("PORT") === "8080" ? "" : get("PORT"));
   const port = Number(portRaw || "8787");
-  const tokenSecret = get("TOKEN_SECRET", demoMode ? SEED_DEFAULTS.tokenSecret : "");
   const vercelHost = get("VERCEL_PROJECT_PRODUCTION_URL") || get("VERCEL_URL");
   const onVercel = Boolean(get("VERCEL") || get("VERCEL_ENV"));
   const appUrl = get("APP_URL");
@@ -174,8 +222,16 @@ export function loadEnv(overrides: Partial<Record<string, string>> = {}): Offerl
     port,
     databaseUrl,
     databasePath: resolveDbPath(databaseUrl),
-    tokenSecret: tokenSecret.length >= 16 ? tokenSecret : SEED_DEFAULTS.tokenSecret,
-    demoKey: get("DEMO_KEY", demoMode ? SEED_DEFAULTS.demoKey : ""),
+    tokenSigningSecret: get("TOKEN_SIGNING_SECRET", demoMode ? SEED_DEFAULTS.tokenSigningSecret : ""),
+    accessTokenEncryptionKey: get(
+      "ACCESS_TOKEN_ENCRYPTION_KEY",
+      demoMode ? SEED_DEFAULTS.accessTokenEncryptionKey : "",
+    ),
+    principalHashSecret: get("PRINCIPAL_HASH_SECRET", demoMode ? SEED_DEFAULTS.principalHashSecret : ""),
+    tokenSigningSecretPrevious: get("TOKEN_SIGNING_SECRET_PREVIOUS", ""),
+    accessTokenEncryptionKeyPrevious: get("ACCESS_TOKEN_ENCRYPTION_KEY_PREVIOUS", ""),
+    // The demo key only ever unlocks demo-mode routes.
+    demoKey: demoMode ? get("DEMO_KEY", SEED_DEFAULTS.demoKey) : "",
     shopifyApiKey: get("SHOPIFY_API_KEY", ""),
     shopifyApiSecret: get("SHOPIFY_API_SECRET", demoMode ? SEED_DEFAULTS.shopifyApiSecret : ""),
     shopifyAppUrl,
@@ -187,5 +243,12 @@ export function loadEnv(overrides: Partial<Record<string, string>> = {}): Offerl
     publicBaseUrl,
     durablePostgres: isPostgresUrl(databaseUrl),
     demoMode,
+    limits: {
+      checkoutTtlSeconds: intEnv(get, "CHECKOUT_TTL_SECONDS", 30 * 60),
+      checkoutsPerMinute: intEnv(get, "CHECKOUTS_PER_MINUTE", 30),
+      checkoutsPerDay: intEnv(get, "CHECKOUTS_PER_DAY", 1000),
+      anonCheckoutsPerOfferPerDay: intEnv(get, "ANON_CHECKOUTS_PER_OFFER_PER_DAY", 50),
+      maxOutstandingPerOffer: intEnv(get, "MAX_OUTSTANDING_CHECKOUTS_PER_OFFER", 200),
+    },
   };
 }

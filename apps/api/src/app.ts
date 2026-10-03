@@ -24,6 +24,7 @@ import {
 import { ApiError, jsonError } from "./errors.ts";
 import { logJson } from "./logger.ts";
 import { handleShopifyWebhook } from "./webhooks.ts";
+import { cleanupExpiredDiscounts } from "./discount-cleanup.ts";
 import { registerSellerRoutes } from "./seller.ts";
 import { registerShopifyAuthRoutes } from "./shopify-auth.ts";
 import { VERSION } from "./version.ts";
@@ -74,8 +75,14 @@ export function createApp(handle: DbHandle) {
     );
   });
 
+  app.notFound((c) => c.json({ error: { code: "NOT_FOUND", message: "Not found" } }, 404));
+
+  const demoMode = handle.env.demoMode === true;
+
+  // The playground header signs a browser in as a seeded demo agent. That is
+  // only acceptable on a demo host.
   app.use("*", async (c, next) => {
-    const mode = c.req.header("x-offerlayer-playground");
+    const mode = demoMode ? c.req.header("x-offerlayer-playground") : undefined;
     if (mode === "shopper" || mode === "seller") {
       const key = mode === "shopper" ? handle.env.demoAgentKey : handle.env.sellerAgentKey;
       if (key && handle.env.demoKey) {
@@ -127,20 +134,17 @@ export function createApp(handle: DbHandle) {
     return agent;
   };
 
-  const requireDemoOrAgent = async (c: {
-    req: { header: (n: string) => string | undefined; raw?: object };
-  }) => {
+  const isDemoKey = (c: { req: { header: (n: string) => string | undefined; raw?: object } }) => {
+    if (!demoMode || !handle.env.demoKey) return false;
     const demo = hdr(c, "x-demo-key");
-    if (demo && timingEqual(demo, handle.env.demoKey)) return { id: "agt_demo", role: "shopper", demo: true };
-    return requireShopper(c);
+    return Boolean(demo && timingEqual(demo, handle.env.demoKey));
   };
 
   const requireDemoOrInternal = (c: {
     req: { header: (n: string) => string | undefined; raw?: object };
   }) => {
-    const demo = hdr(c, "x-demo-key");
     const internal = c.req.header("x-internal-key") ?? bearer(hdr(c, "authorization"));
-    if (demo && timingEqual(demo, handle.env.demoKey)) return;
+    if (isDemoKey(c)) return;
     if (internal && timingEqual(internal, handle.env.internalApiKey)) return;
     throw jsonError("UNAUTHORIZED", "Demo or internal key required", 401);
   };
@@ -148,8 +152,7 @@ export function createApp(handle: DbHandle) {
   const requireSellerOrDemoOrInternal = async (c: {
     req: { header: (n: string) => string | undefined; raw?: object };
   }) => {
-    const demo = hdr(c, "x-demo-key");
-    if (demo && timingEqual(demo, handle.env.demoKey)) return { id: "demo", role: "internal" };
+    if (isDemoKey(c)) return { id: "demo", role: "internal" };
     const internal = c.req.header("x-internal-key");
     if (internal && timingEqual(internal, handle.env.internalApiKey)) {
       return { id: "internal", role: "internal" };
@@ -164,10 +167,7 @@ export function createApp(handle: DbHandle) {
   const requireDemoAndSeller = async (c: {
     req: { header: (n: string) => string | undefined; raw?: object };
   }) => {
-    const demo = hdr(c, "x-demo-key");
-    if (!demo || !timingEqual(demo, handle.env.demoKey)) {
-      throw jsonError("UNAUTHORIZED", "Demo key required", 401);
-    }
+    if (!isDemoKey(c)) throw jsonError("UNAUTHORIZED", "Demo key required", 401);
     return requireSeller(c);
   };
 
@@ -227,6 +227,7 @@ export function createApp(handle: DbHandle) {
     const result = await issueCheckout(handle, {
       offerId: body.offer_id,
       agentId: agent.id,
+      issuedBy: agent.id,
       principalRef: body.principal_ref,
     });
     logJson({ level: "info", msg: "checkout_issued", offer_id: body.offer_id, agent_id: agent.id });
@@ -244,6 +245,7 @@ export function createApp(handle: DbHandle) {
     const result = await issueCheckout(handle, {
       offerId: body.offer_id,
       agentId: presenting,
+      issuedBy: agent.id,
       referrerAgentId: agent.id,
     });
     return c.json(result, 201);
@@ -255,31 +257,51 @@ export function createApp(handle: DbHandle) {
     return c.json(conversionForToken(handle, token));
   });
 
-  app.post("/v1/simulate/purchase", async (c) => {
-    await requireDemoOrAgent(c);
-    const body = simulatePurchaseSchema.parse(await c.req.json());
-    const conversion = recordPaidOrder(handle, {
-      token: body.token,
-      orderTotal: body.order_total,
-      currency: body.currency,
-      emailHash: body.email_hash,
+  // Simulated purchases and hold clearing exist for local demos and tests
+  // only. In production the routes are not registered (404), and a verified
+  // Shopify webhook is the only way a token is consumed or an order recorded.
+  if (demoMode) {
+    app.post("/v1/simulate/purchase", async (c) => {
+      if (!isDemoKey(c)) await requireShopper(c);
+      const body = simulatePurchaseSchema.parse(await c.req.json());
+      const conversion = recordPaidOrder(handle, {
+        token: body.token,
+        orderTotal: body.order_total,
+        currency: body.currency,
+        email: body.email_hash,
+      });
+      return c.json(conversion, 201);
     });
-    return c.json(conversion, 201);
-  });
 
-  app.post("/v1/simulate/clear", async (c) => {
-    requireDemoOrInternal(c);
-    const body = simulateClearSchema.parse(await c.req.json());
-    return c.json(clearHold(handle, body.token));
-  });
+    app.post("/v1/simulate/clear", async (c) => {
+      requireDemoOrInternal(c);
+      const body = simulateClearSchema.parse(await c.req.json());
+      return c.json(clearHold(handle, body.token));
+    });
+  }
 
   app.post("/v1/webhooks/shopify", async (c) => {
     const raw = await c.req.text();
-    const hmac = c.req.header("x-shopify-hmac-sha256") ?? undefined;
-    const topic = c.req.header("x-shopify-topic") ?? "";
-    const result = handleShopifyWebhook(handle, { topic, rawBody: raw, hmac });
+    const result = handleShopifyWebhook(handle, {
+      topic: c.req.header("x-shopify-topic") ?? "",
+      rawBody: raw,
+      hmac: c.req.header("x-shopify-hmac-sha256") ?? undefined,
+      shopDomain: c.req.header("x-shopify-shop-domain") ?? null,
+      webhookId: c.req.header("x-shopify-webhook-id") ?? null,
+    });
     return c.json(result);
   });
+
+  // Scheduled job: delete Shopify discounts behind expired, unused checkouts.
+  // Accepts the internal key, or CRON_SECRET as a bearer (what Vercel Cron sends).
+  const runCleanup = async (c: { req: { header: (n: string) => string | undefined; raw?: object } }) => {
+    const auth = bearer(c.req.header("authorization"));
+    const cron = process.env.CRON_SECRET;
+    if (!(cron && cron.length >= 16 && auth && timingEqual(auth, cron))) requireDemoOrInternal(c);
+    return cleanupExpiredDiscounts(handle);
+  };
+  app.get("/v1/internal/jobs/cleanup-discounts", async (c) => c.json(await runCleanup(c)));
+  app.post("/v1/internal/jobs/cleanup-discounts", async (c) => c.json(await runCleanup(c)));
 
   app.post("/v1/internal/offers", async (c) => {
     requireDemoOrInternal(c);
@@ -288,16 +310,18 @@ export function createApp(handle: DbHandle) {
     return c.json(saved, 201);
   });
 
-  app.get("/v1/internal/seed", (c) => {
-    requireDemoOrInternal(c);
-    return c.json({
-      demo_agent_id: "agt_demo",
-      muse_agent_id: "agt_muse",
-      offer_id: "off_towel_organic_set",
-      shop: "demo-towels.myshopify.com",
-      seller_agent_id: "agt_seller",
+  if (demoMode) {
+    app.get("/v1/internal/seed", (c) => {
+      requireDemoOrInternal(c);
+      return c.json({
+        demo_agent_id: "agt_demo",
+        muse_agent_id: "agt_muse",
+        offer_id: "off_towel_organic_set",
+        shop: "demo-towels.myshopify.com",
+        seller_agent_id: "agt_seller",
+      });
     });
-  });
+  }
 
   registerSellerRoutes(app, handle, {
     requireSeller,

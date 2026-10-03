@@ -102,10 +102,10 @@ describe("real Shopify OAuth + catalog", () => {
   }
 
   it("encrypts Shopify access tokens at rest", () => {
-    const blob = encryptSecret("shpat_live_test", handle.env.tokenSecret);
+    const blob = encryptSecret("shpat_live_test", handle.env.accessTokenEncryptionKey);
     expect(blob.startsWith("enc1.")).toBe(true);
     expect(blob).not.toContain("shpat_live_test");
-    expect(decryptSecret(blob, handle.env.tokenSecret)).toBe("shpat_live_test");
+    expect(decryptSecret(blob, handle.env.accessTokenEncryptionKey)).toBe("shpat_live_test");
   });
 
   it("GET /auth/login with Partners key redirects to Shopify", async () => {
@@ -288,7 +288,7 @@ describe("real Shopify OAuth + catalog", () => {
     });
     handle.sqlite
       .prepare("UPDATE merchants SET access_token_enc = ? WHERE shop_domain = ?")
-      .run(encryptSecret("shpat_live_test", handle.env.tokenSecret), REAL_SHOP);
+      .run(encryptSecret("shpat_live_test", handle.env.accessTokenEncryptionKey), REAL_SHOP);
     const shops = await json("/v1/seller/shops", { headers: sellerHeaders() });
     const merch = (shops.body.shops as { merchant_id: string; shop_domain: string }[]).find(
       (s) => s.shop_domain === REAL_SHOP,
@@ -316,6 +316,7 @@ describe("real Shopify OAuth + catalog", () => {
       headers: {
         "content-type": "application/json",
         "x-shopify-topic": "orders/paid",
+        "x-shopify-shop-domain": "demo-towels.myshopify.com",
         "x-shopify-hmac-sha256": hmac,
       },
       body: payload,

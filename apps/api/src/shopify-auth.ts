@@ -45,9 +45,10 @@ export function installLoginHtml(args: {
   sellerLink: string;
   completeHint: string;
   oauthConfigured: boolean;
+  demoMode?: boolean;
 }): string {
-  const { shop, sellerLink, completeHint, oauthConfigured } = args;
-  const demoForm = sellerLink
+  const { shop, sellerLink, completeHint, oauthConfigured, demoMode = false } = args;
+  const demoForm = sellerLink && demoMode
     ? `<form class="card" method="post" action="/auth/demo-complete">
          <input type="hidden" name="seller_link" value="${sellerLink}" />
          <input type="hidden" name="shop" value="${shop}" />
@@ -119,6 +120,7 @@ export function registerShopifyAuthRoutes(app: Hono, handle: DbHandle) {
         sellerLink,
         completeHint,
         oauthConfigured,
+        demoMode: handle.env.demoMode,
       }),
     );
   });
@@ -205,6 +207,8 @@ export function registerShopifyAuthRoutes(app: Hono, handle: DbHandle) {
       ),
     );
   });
+
+  if (!handle.env.demoMode) return;
 
   app.post("/auth/demo-complete", async (c) => {
     const form = await c.req.parseBody();

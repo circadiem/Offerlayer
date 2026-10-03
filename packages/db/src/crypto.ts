@@ -1,13 +1,25 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
 
 export function hashApiKey(key: string): string {
   return createHash("sha256").update(key, "utf8").digest("hex");
 }
 
-export function hashPrincipal(ref?: string | null): string {
-  if (!ref || ref === "anon") return "anon";
-  if (ref.startsWith("sha256:")) return ref;
-  return `sha256:${createHash("sha256").update(ref, "utf8").digest("hex")}`;
+/** Trim + lowercase so "Buyer@Example.com " and "buyer@example.com" match. */
+export function normalizePrincipal(ref: string): string {
+  return ref.trim().toLowerCase();
+}
+
+/**
+ * Keyed hash for shopper identifiers (an agent's principal_ref, or the email on
+ * a Shopify order). Both sides go through this one function so per-shopper caps
+ * line up. HMAC, not bare SHA-256, so an email cannot be recovered by hashing a
+ * dictionary of addresses.
+ */
+export function hashPrincipal(ref: string | null | undefined, secret: string): string {
+  if (!secret) throw new Error("PRINCIPAL_HASH_SECRET is required to hash principals");
+  const normalized = ref ? normalizePrincipal(ref) : "";
+  if (!normalized || normalized === "anon") return "anon";
+  return `hmac:${createHmac("sha256", secret).update(normalized, "utf8").digest("hex")}`;
 }
 
 function aesKey(secret: string): Buffer {

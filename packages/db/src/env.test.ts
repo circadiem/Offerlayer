@@ -22,9 +22,11 @@ describe("database path on serverless hosts", () => {
     expect(env.databasePath).toBe(path);
   });
 
-  it("TOKEN_SECRET falls back to a long default", () => {
-    const env = loadEnv({ TOKEN_SECRET: "short" });
-    expect(env.tokenSecret.length).toBeGreaterThanOrEqual(16);
+  it("demo mode gets distinct signing, encryption, and hashing secrets", () => {
+    const env = loadEnv({ OFFERLAYER_DEMO: "1" });
+    const secrets = [env.tokenSigningSecret, env.accessTokenEncryptionKey, env.principalHashSecret];
+    expect(new Set(secrets).size).toBe(3);
+    for (const s of secrets) expect(s.length).toBeGreaterThanOrEqual(32);
   });
 
   it("APP_URL is the public Shopify origin and never stays localhost", () => {
@@ -58,22 +60,41 @@ describe("database path on serverless hosts", () => {
 describe("demo mode vs production secrets", () => {
   const db = { DATABASE_URL: `file:${tmpdir()}/ol-env-secrets-test.db`, OFFERLAYER_DEMO: "" };
   const prodSecrets = {
-    TOKEN_SECRET: "tok_" + "a".repeat(28),
+    TOKEN_SIGNING_SECRET: "sig_" + "a".repeat(40),
+    ACCESS_TOKEN_ENCRYPTION_KEY: "enc_" + "g".repeat(40),
+    PRINCIPAL_HASH_SECRET: "prn_" + "h".repeat(40),
     INTERNAL_API_KEY: "int_" + "b".repeat(28),
-    DEMO_KEY: "dem_" + "c".repeat(28),
     DEMO_AGENT_KEY: "agt_" + "d".repeat(28),
     MUSE_AGENT_KEY: "agt_" + "e".repeat(28),
     SELLER_AGENT_KEY: "agt_" + "f".repeat(28),
   };
 
   it("refuses to boot in production mode without explicit secrets", () => {
-    expect(() => loadEnv({ ...db })).toThrow(/refusing to boot: .*TOKEN_SECRET/);
+    expect(() => loadEnv({ ...db })).toThrow(
+      /refusing to boot: .*TOKEN_SIGNING_SECRET, ACCESS_TOKEN_ENCRYPTION_KEY, PRINCIPAL_HASH_SECRET/,
+    );
   });
 
   it("refuses to boot in production mode with a short secret", () => {
-    expect(() => loadEnv({ ...db, ...prodSecrets, TOKEN_SECRET: "short" })).toThrow(
-      /shorter than 16 characters/,
-    );
+    expect(() => loadEnv({ ...db, ...prodSecrets, TOKEN_SIGNING_SECRET: "x".repeat(20) })).toThrow(/too short/);
+  });
+
+  it("refuses to boot when the legacy TOKEN_SECRET is all that is set", () => {
+    const { TOKEN_SIGNING_SECRET: _a, ACCESS_TOKEN_ENCRYPTION_KEY: _b, PRINCIPAL_HASH_SECRET: _c, ...rest } =
+      prodSecrets;
+    expect(() => loadEnv({ ...db, ...rest, TOKEN_SECRET: "t".repeat(40) })).toThrow(/TOKEN_SECRET is no longer read/);
+  });
+
+  it("refuses to boot when two secrets share a value", () => {
+    expect(() =>
+      loadEnv({ ...db, ...prodSecrets, PRINCIPAL_HASH_SECRET: prodSecrets.ACCESS_TOKEN_ENCRYPTION_KEY }),
+    ).toThrow(/must be different values/);
+  });
+
+  it("refuses to boot with a public demo value", () => {
+    expect(() =>
+      loadEnv({ ...db, ...prodSecrets, TOKEN_SIGNING_SECRET: "offerlayer_demo_token_signing_secret_v0" }),
+    ).toThrow(/public demo value/);
   });
 
   it("refuses to boot in production mode when Shopify key lacks its secret", () => {
@@ -85,7 +106,10 @@ describe("demo mode vs production secrets", () => {
   it("boots in production mode with explicit secrets and never demo defaults", () => {
     const env = loadEnv({ ...db, ...prodSecrets });
     expect(env.demoMode).toBe(false);
-    expect(env.tokenSecret).toBe(prodSecrets.TOKEN_SECRET);
+    expect(env.tokenSigningSecret).toBe(prodSecrets.TOKEN_SIGNING_SECRET);
+    expect(env.accessTokenEncryptionKey).toBe(prodSecrets.ACCESS_TOKEN_ENCRYPTION_KEY);
+    expect(env.principalHashSecret).toBe(prodSecrets.PRINCIPAL_HASH_SECRET);
+    expect(env.demoKey).toBe("");
     expect(env.internalApiKey).toBe(prodSecrets.INTERNAL_API_KEY);
     expect(env.sellerAgentKey).toBe(prodSecrets.SELLER_AGENT_KEY);
   });

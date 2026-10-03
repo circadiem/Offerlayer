@@ -55,7 +55,7 @@ function safeEqual(a: string, b: string): boolean {
 
 export function issueToken(input: IssueTokenInput, secret: string): { token: string; payload: TokenPayload } {
   if (!secret || secret.length < 16) {
-    throw new Error("TOKEN_SECRET must be at least 16 characters");
+    throw new Error("TOKEN_SIGNING_SECRET must be at least 16 characters");
   }
   const now = input.now ?? new Date();
   const ttl = input.ttlSeconds ?? 60 * 60;
@@ -74,7 +74,17 @@ export function issueToken(input: IssueTokenInput, secret: string): { token: str
   return { token: `olt_${body}.${sig}`, payload };
 }
 
-export function verifyToken(token: string, secret: string, now?: Date): TokenPayload {
+/**
+ * `ignoreExpiry` is for verified Shopify order webhooks: the token's expiry
+ * gates the discount code at checkout, but orders/paid can arrive after it
+ * (slow payment methods, delayed delivery). The signature is still checked.
+ */
+export function verifyToken(
+  token: string,
+  secret: string,
+  now?: Date,
+  opts: { ignoreExpiry?: boolean } = {},
+): TokenPayload {
   if (!token.startsWith("olt_")) {
     throw new TokenError("Token must start with olt_", "MALFORMED_TOKEN");
   }
@@ -97,7 +107,7 @@ export function verifyToken(token: string, secret: string, now?: Date): TokenPay
   }
   const payload = tokenPayloadSchema.parse(parsed);
   const ts = Math.floor((now ?? new Date()).getTime() / 1000);
-  if (payload.exp <= ts) {
+  if (!opts.ignoreExpiry && payload.exp <= ts) {
     throw new TokenError("Token expired", "EXPIRED_TOKEN");
   }
   return payload;
