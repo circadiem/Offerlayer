@@ -78,6 +78,8 @@ export const offers = pgTable(
     checkoutUrlTemplate: text("checkout_url_template").notNull(),
     ucp: integer("ucp").notNull().default(0),
     mandateId: text("mandate_id").references(() => mandates.id),
+    /** JSON {orderDiscounts, productDiscounts, shippingDiscounts}; null = combines with nothing. */
+    combinesWithJson: text("combines_with_json"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
@@ -218,6 +220,23 @@ export const webhookEvents = pgTable("webhook_events", {
   receivedAt: text("received_at").notNull(),
 }).enableRLS();
 
+/**
+ * Audit trail for Shopify's privacy webhooks (customers/data_request,
+ * customers/redact, shop/redact). Holds ids and counts only, never PII.
+ */
+export const complianceRequests = pgTable(
+  "compliance_requests",
+  {
+    id: text("id").primaryKey(),
+    topic: text("topic").notNull(),
+    shopDomain: text("shop_domain").notNull(),
+    summaryJson: text("summary_json").notNull(),
+    receivedAt: text("received_at").notNull(),
+    completedAt: text("completed_at"),
+  },
+  (t) => [index("idx_compliance_shop").on(t.shopDomain, t.receivedAt)],
+).enableRLS();
+
 export const payouts = pgTable(
   "payouts",
   {
@@ -277,6 +296,7 @@ export const schema = {
   ordersExt,
   orderRefunds,
   webhookEvents,
+  complianceRequests,
   payouts,
   sellerLinks,
   shopGrants,
@@ -285,6 +305,7 @@ export const schema = {
 
 /** Every table, in an order that is safe to TRUNCATE ... CASCADE in one statement. */
 export const TABLE_NAMES = [
+  "compliance_requests",
   "webhook_events",
   "order_refunds",
   "payouts",

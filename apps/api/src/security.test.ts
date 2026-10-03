@@ -22,7 +22,7 @@ import {
 import { createApp } from "./app.ts";
 import { recordPaidOrder } from "./conversion-machine.ts";
 import { cleanupExpiredDiscounts } from "./discount-cleanup.ts";
-import { shopifyAdmin, type ShopifyFetch } from "./shopify-admin.ts";
+import { discountItems, SHOPIFY_API_VERSION, shopifyAdmin, type ShopifyFetch } from "./shopify-admin.ts";
 
 const DEMO_SHOP = "demo-towels.myshopify.com";
 const OFFER = "off_towel_organic_set";
@@ -892,5 +892,136 @@ describe("attribution by single-use discount code", () => {
       discount_codes: [{ code: "OL000000000000" }],
     });
     expect(body.ignored).toBe(true);
+  });
+});
+
+describe("Phase 2 platform: discount scope, stacking, API version", () => {
+  it("scopes codes to the offer's items and never widens to the whole store", () => {
+    expect(discountItems({ type: "shop", ids: [] })).toEqual({ ok: true, items: { all: true } });
+    expect(discountItems({ type: "collection", ids: ["gid://shopify/Collection/7"] })).toEqual({
+      ok: true,
+      items: { collections: { add: ["gid://shopify/Collection/7"] } },
+    });
+    expect(
+      discountItems({ type: "product", ids: ["gid://shopify/Product/1", "gid://shopify/ProductVariant/2"] }),
+    ).toEqual({
+      ok: true,
+      items: {
+        products: { productsToAdd: ["gid://shopify/Product/1"], productVariantsToAdd: ["gid://shopify/ProductVariant/2"] },
+      },
+    });
+    expect(discountItems({ type: "product", ids: ["1001"] }).ok).toBe(false);
+    expect(discountItems({ type: "collection", ids: [] }).ok).toBe(false);
+  });
+
+  it("mints with the pinned API version and no stacking by default", async () => {
+    const h = track(await harness());
+    const shopify = fakeShopify();
+    shopifyAdmin.fetch = shopify.fetch;
+    await h.bindShop();
+    await h.checkout();
+    expect(shopify.calls[0].url).toContain(`/admin/api/${SHOPIFY_API_VERSION}/graphql.json`);
+    expect(SHOPIFY_API_VERSION).toBe("2026-10");
+    const input = shopify.calls[0].variables.basicCodeDiscount as Record<string, unknown>;
+    expect(input.combinesWith).toEqual({ orderDiscounts: false, productDiscounts: false, shippingDiscounts: false });
+    expect(input.customerGets).toMatchObject({
+      items: { products: { productsToAdd: ["gid://shopify/Product/1001"] } },
+    });
+  });
+
+  it("does not mint a code for an offer it cannot scope", async () => {
+    const h = track(await harness());
+    const shopify = fakeShopify();
+    shopifyAdmin.fetch = shopify.fetch;
+    await h.bindShop();
+    await h.handle.raw("UPDATE offers SET selector_type = 'collection', selector_ids_json = '[]' WHERE id = $1", [OFFER]);
+    const res = await h.checkout();
+    expect(res.res.status).toBe(201);
+    expect(shopify.calls).toHaveLength(0);
+    expect(res.body.checkout.permalink).not.toContain("discount=");
+  });
+});
+
+describe("Phase 2 platform: uninstall and privacy webhooks", () => {
+  async function paidOrder(h: Awaited<ReturnType<typeof harness>>, id: number, email: string) {
+    const issued = await h.checkout({ offer_id: OFFER, principal_ref: email });
+    await h.webhook("orders/paid", {
+      id,
+      total_price: "32.00",
+      currency: "USD",
+      email,
+      note_attributes: [{ name: "agent_ref", value: issued.body.token }],
+    });
+    return issued.body.token as string;
+  }
+
+  it("app/uninstalled pauses offers, forgets the token, and stops cleanup retries", async () => {
+    const h = track(await harness());
+    shopifyAdmin.fetch = fakeShopify().fetch;
+    await h.bindShop();
+    await h.checkout({ offer_id: OFFER, principal_ref: "open@example.com" });
+    const { body } = await h.webhook("app/uninstalled", { id: 1, myshopify_domain: DEMO_SHOP });
+    expect(body).toMatchObject({ ok: true, paused_offers: 1, open_codes: 1 });
+    const [offer] = await h.handle.raw("SELECT status FROM offers WHERE id = $1", [OFFER]);
+    expect(offer.status).toBe("paused");
+    const [merchant] = await h.handle.raw("SELECT access_token_enc FROM merchants WHERE shop_domain = $1", [DEMO_SHOP]);
+    expect(merchant.access_token_enc).toBeNull();
+    const later = new Date(Date.now() + 2 * 60 * 60 * 1000);
+    expect((await cleanupExpiredDiscounts(h.handle, { now: later })).checked).toBe(0);
+    expect((await h.checkout()).res.status).toBe(409);
+  });
+
+  it("customers/data_request records what we hold, without PII", async () => {
+    const h = track(await harness());
+    await paidOrder(h, 4001, "Asker@Example.com");
+    const { body } = await h.webhook("customers/data_request", {
+      shop_domain: DEMO_SHOP,
+      customer: { id: 77, email: "asker@example.com" },
+      orders_requested: [4001],
+      data_request: { id: 9 },
+    });
+    expect(body).toMatchObject({ ok: true, orders: 1 });
+    const [row] = await h.handle.raw("SELECT topic, summary_json, completed_at FROM compliance_requests");
+    expect(row.topic).toBe("customers/data_request");
+    expect(row.completed_at).toBeNull();
+    const summary = JSON.parse(String(row.summary_json));
+    expect(summary.data_held).toEqual([expect.objectContaining({ shopify_order_id: "4001", attributed_total: "32.00" })]);
+    expect(String(row.summary_json).toLowerCase()).not.toContain("asker");
+  });
+
+  it("customers/redact removes the customer's hashes", async () => {
+    const h = track(await harness());
+    await paidOrder(h, 4002, "gone@example.com");
+    const { body } = await h.webhook("customers/redact", {
+      shop_domain: DEMO_SHOP,
+      customer: { id: 78, email: "gone@example.com" },
+      orders_to_redact: [4002],
+    });
+    expect(body.redacted).toMatchObject({ orders: 1, principals: 1, tokens: 1 });
+    const [order] = await h.handle.raw("SELECT email_hash FROM orders_ext WHERE shopify_order_id = '4002'");
+    expect(order.email_hash).toBeNull();
+    expect(await h.handle.raw("SELECT * FROM principals")).toEqual([]);
+  });
+
+  it("shop/redact deletes everything for the shop", async () => {
+    const h = track(await harness());
+    await paidOrder(h, 4003, "x@example.com");
+    const { body } = await h.webhook("shop/redact", { shop_id: 1, shop_domain: DEMO_SHOP });
+    expect(body.deleted).toMatchObject({ merchants: 1, offers: 1, orders: 1 });
+    for (const t of ["merchants", "offers", "tokens", "orders_ext", "principals", "shop_grants"]) {
+      expect(await h.handle.raw(`SELECT * FROM ${t}`), t).toEqual([]);
+    }
+    expect((await h.handle.raw("SELECT topic FROM compliance_requests"))[0].topic).toBe("shop/redact");
+  });
+
+  it("acts on the shop in the signed payload, not the unsigned header", async () => {
+    const h = track(await harness());
+    const { body } = await h.webhook(
+      "shop/redact",
+      { shop_id: 2, shop_domain: "someone-else.myshopify.com" },
+      { shop: DEMO_SHOP },
+    );
+    expect(body.deleted).toEqual({ merchants: 0 });
+    expect(await h.handle.raw("SELECT id FROM merchants")).toHaveLength(1);
   });
 });

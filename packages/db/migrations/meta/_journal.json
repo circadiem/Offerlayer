@@ -15,6 +15,13 @@
       "when": 1791027448636,
       "tag": "0001_discount_code_index",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791027777625,
+      "tag": "0002_compliance_and_combines",
+      "breakpoints": true
     }
   ]
 }

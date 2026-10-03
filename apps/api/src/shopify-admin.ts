@@ -1,7 +1,12 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { decryptSecret, encryptSecret } from "@offerlayer/db";
 
-export const SHOPIFY_API_VERSION = "2025-01";
+/**
+ * The one Admin API version every call uses. Keep in sync with
+ * apps/shopify/shopify.app.toml. Shopify supports each version for about a
+ * year; bump at least yearly (release notes: shopify.dev/changelog).
+ */
+export const SHOPIFY_API_VERSION = "2026-10";
 export const WEBHOOK_TOPICS = ["orders/paid", "orders/cancelled", "refunds/create"] as const;
 
 export type ShopifyFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -175,10 +180,11 @@ export async function registerWebhooks(args: {
     ["orders/paid", "ORDERS_PAID"],
     ["orders/cancelled", "ORDERS_CANCELLED"],
     ["refunds/create", "REFUNDS_CREATE"],
+    ["app/uninstalled", "APP_UNINSTALLED"],
   ] as const;
   for (const [topic, gqlTopic] of topics) {
     try {
-      const res = await shopifyAdmin.fetch(`https://${shop}/admin/api/2026-07/graphql.json`, {
+      const res = await shopifyAdmin.fetch(`https://${shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -302,13 +308,61 @@ export function discountTitle(offerId: string): string {
   return `Offerlayer · agent checkout · ${offerId}`;
 }
 
+export type DiscountCombines = {
+  orderDiscounts: boolean;
+  productDiscounts: boolean;
+  shippingDiscounts: boolean;
+};
+
+/** Default: the agent discount does not stack with any other discount. */
+export const NO_COMBINING: DiscountCombines = {
+  orderDiscounts: false,
+  productDiscounts: false,
+  shippingDiscounts: false,
+};
+
+/**
+ * Which items a code applies to, from the offer's selector. Never widens: a
+ * product or collection selector with no usable ids is an error, not a
+ * store-wide discount.
+ */
+export function discountItems(selector: {
+  type: string;
+  ids: string[];
+}): { ok: true; items: Record<string, unknown> } | { ok: false; error: string } {
+  if (selector.type === "shop") return { ok: true, items: { all: true } };
+  if (selector.type === "collection") {
+    const collections = selector.ids.filter((id) => /^gid:\/\/shopify\/Collection\/\d+$/.test(id));
+    if (collections.length === 0) return { ok: false, error: "collection offer has no Collection gids" };
+    return { ok: true, items: { collections: { add: collections } } };
+  }
+  if (selector.type === "product") {
+    const products = selector.ids.filter((id) => /^gid:\/\/shopify\/Product\/\d+$/.test(id));
+    const variants = selector.ids.filter((id) => /^gid:\/\/shopify\/ProductVariant\/\d+$/.test(id));
+    if (products.length === 0 && variants.length === 0) {
+      return { ok: false, error: "product offer has no Product or ProductVariant gids" };
+    }
+    return {
+      ok: true,
+      items: {
+        products: {
+          ...(products.length > 0 ? { productsToAdd: products } : {}),
+          ...(variants.length > 0 ? { productVariantsToAdd: variants } : {}),
+        },
+      },
+    };
+  }
+  return { ok: false, error: `unknown selector type ${selector.type}` };
+}
+
 export async function createCheckoutDiscount(args: {
   shop: string;
   accessToken: string;
   code: string;
   offerId: string;
   percent: string;
-  productGid?: string | null;
+  selector: { type: string; ids: string[] };
+  combinesWith?: DiscountCombines;
   endsAt: string;
 }): Promise<{ ok: true; nodeId: string } | { ok: false; error: string }> {
   const shop = normalizeShopDomain(args.shop);
@@ -316,9 +370,9 @@ export async function createCheckoutDiscount(args: {
   if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
     return { ok: false, error: "invalid percent" };
   }
-  const items = args.productGid
-    ? { products: { productsToAdd: [args.productGid] } }
-    : { all: true };
+  const scoped = discountItems(args.selector);
+  if (!scoped.ok) return scoped;
+  const items = scoped.items;
   const res = await shopifyAdmin.fetch(`https://${shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
     method: "POST",
     headers: {
@@ -336,6 +390,8 @@ export async function createCheckoutDiscount(args: {
           endsAt: args.endsAt,
           usageLimit: 1,
           appliesOncePerCustomer: true,
+          combinesWith: args.combinesWith ?? NO_COMBINING,
+          // Deprecated in favor of `context`, still accepted; VERIFY on the next bump.
           customerSelection: { all: true },
           customerGets: {
             value: { percentage: percent / 100 },

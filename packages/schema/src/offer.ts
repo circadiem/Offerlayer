@@ -258,6 +258,13 @@ export const sellerCreateOfferSchema = z
         clawback_days: z.number().int().min(0).max(90).default(14),
       })
       .default({ clawback_days: 14 }),
+    combines_with: z
+      .object({
+        order_discounts: z.boolean().default(false),
+        product_discounts: z.boolean().default(false),
+        shipping_discounts: z.boolean().default(false),
+      })
+      .optional(),
     checkout: z
       .object({
         ucp: z.boolean().optional(),
@@ -308,6 +315,13 @@ export const sellerPatchOfferSchema = z
         max_per_principal_per_day: z.number().int().min(1).optional(),
         max_units_per_order: z.number().int().min(1).optional(),
         clawback_days: z.number().int().min(0).max(90).optional(),
+      })
+      .optional(),
+    combines_with: z
+      .object({
+        order_discounts: z.boolean().default(false),
+        product_discounts: z.boolean().default(false),
+        shipping_discounts: z.boolean().default(false),
       })
       .optional(),
     checkout: z
