@@ -54,6 +54,9 @@ export const agents = sqliteTable("agents", {
   apiKeyHash: text("api_key_hash").notNull(),
   status: text("status").notNull().default("active"),
   role: text("role").notNull().default("shopper"),
+  /** Per-key overrides for checkout rate limits; null uses the env default. */
+  ratePerMinute: integer("rate_per_minute"),
+  ratePerDay: integer("rate_per_day"),
   createdAt: text("created_at").notNull(),
 });
 
@@ -83,9 +86,20 @@ export const tokens = sqliteTable(
     nonce: text("nonce").notNull(),
     rawJws: text("raw_jws").notNull(),
     consumedAt: text("consumed_at"),
+    /** The agent key that asked for this token (rate limits count against it). */
+    issuedBy: text("issued_by"),
+    discountCode: text("discount_code"),
+    /** Shopify DiscountCodeNode gid, so the cleanup job can delete unused codes. */
+    discountNodeId: text("discount_node_id"),
+    discountDeletedAt: text("discount_deleted_at"),
+    discountCleanupError: text("discount_cleanup_error"),
     createdAt: text("created_at").notNull(),
   },
-  (t) => [uniqueIndex("idx_tokens_nonce").on(t.nonce)],
+  (t) => [
+    uniqueIndex("idx_tokens_nonce").on(t.nonce),
+    index("idx_tokens_issued_by").on(t.issuedBy, t.createdAt),
+    index("idx_tokens_offer_created").on(t.offerId, t.createdAt),
+  ],
 );
 
 export const ordersExt = sqliteTable(
@@ -99,16 +113,50 @@ export const ordersExt = sqliteTable(
     tokenId: text("token_id")
       .notNull()
       .references(() => tokens.tokenId),
+    /** Attributed amount: the offer's eligible lines, after discounts. */
     total: text("total").notNull(),
+    /** The whole order's total, for reference only. */
+    orderTotal: text("order_total"),
+    /** JSON [{ id, amount }] of the line items counted in `total`. */
+    attributedLinesJson: text("attributed_lines_json"),
+    /** Sum of attributed amounts refunded so far. */
+    refundedTotal: text("refunded_total").notNull().default("0.00"),
     currency: text("currency").notNull(),
+    /** HMAC of the normalized order email (never the raw email). */
     emailHash: text("email_hash"),
     status: text("status").notNull(),
     paidAt: text("paid_at").notNull(),
     holdUntil: text("hold_until").notNull(),
     clawedAt: text("clawed_at"),
   },
-  (t) => [uniqueIndex("idx_orders_shopify").on(t.shopifyOrderId)],
+  (t) => [
+    uniqueIndex("idx_orders_shopify").on(t.shopifyOrderId),
+    uniqueIndex("idx_orders_token").on(t.tokenId),
+  ],
 );
+
+export const orderRefunds = sqliteTable(
+  "order_refunds",
+  {
+    id: text("id").primaryKey(),
+    orderExtId: text("order_ext_id")
+      .notNull()
+      .references(() => ordersExt.id),
+    shopifyRefundId: text("shopify_refund_id").notNull(),
+    amount: text("amount").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("idx_order_refunds_unique").on(t.orderExtId, t.shopifyRefundId)],
+);
+
+/** One row per Shopify delivery (X-Shopify-Webhook-Id); replays return the stored result. */
+export const webhookEvents = sqliteTable("webhook_events", {
+  webhookId: text("webhook_id").primaryKey(),
+  topic: text("topic").notNull(),
+  shopDomain: text("shop_domain"),
+  resultJson: text("result_json").notNull(),
+  receivedAt: text("received_at").notNull(),
+});
 
 export const payouts = sqliteTable("payouts", {
   id: text("id").primaryKey(),
@@ -184,6 +232,8 @@ export const schema = {
   principals,
   tokens,
   ordersExt,
+  orderRefunds,
+  webhookEvents,
   payouts,
   sellerLinks,
   shopGrants,

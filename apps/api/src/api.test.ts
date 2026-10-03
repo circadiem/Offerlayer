@@ -179,7 +179,7 @@ describe("offerlayer v0", () => {
         principalHash: "anon",
         exp: Math.floor(Date.now() / 1000) - 10,
       },
-      handle.env.tokenSecret,
+      handle.env.tokenSigningSecret,
     );
     handle.sqlite
       .prepare(
@@ -301,6 +301,7 @@ describe("offerlayer v0", () => {
       headers: {
         "content-type": "application/json",
         "x-shopify-topic": "orders/paid",
+        "x-shopify-shop-domain": "demo-towels.myshopify.com",
         "x-shopify-hmac-sha256": hmacShopify(shopSecret, payload),
       },
       body: payload,
@@ -321,6 +322,7 @@ describe("offerlayer v0", () => {
       headers: {
         "content-type": "application/json",
         "x-shopify-topic": "orders/paid",
+        "x-shopify-shop-domain": "demo-towels.myshopify.com",
         "x-shopify-hmac-sha256": hmacShopify(shopSecret, payload),
       },
       body: payload,
@@ -336,6 +338,7 @@ describe("offerlayer v0", () => {
       headers: {
         "content-type": "application/json",
         "x-shopify-topic": "orders/paid",
+        "x-shopify-shop-domain": "demo-towels.myshopify.com",
         "x-shopify-hmac-sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       },
       body: payload,
@@ -364,6 +367,7 @@ describe("offerlayer v0", () => {
       headers: {
         "content-type": "application/json",
         "x-shopify-topic": "orders/paid",
+        "x-shopify-shop-domain": "demo-towels.myshopify.com",
         "x-shopify-hmac-sha256": hmacShopify(shopSecret, paid),
       },
       body: paid,
@@ -381,6 +385,7 @@ describe("offerlayer v0", () => {
       headers: {
         "content-type": "application/json",
         "x-shopify-topic": "refunds/create",
+        "x-shopify-shop-domain": "demo-towels.myshopify.com",
         "x-shopify-hmac-sha256": hmacShopify(shopSecret, refund),
       },
       body: refund,
@@ -456,6 +461,7 @@ describe("offerlayer v0.3 shop pay attach", () => {
       headers: {
         "content-type": "application/json",
         "x-shopify-topic": "orders/paid",
+        "x-shopify-shop-domain": "demo-towels.myshopify.com",
         "x-shopify-hmac-sha256": hmacShopify(shopSecret, raw),
       },
       body: raw,
@@ -612,6 +618,7 @@ describe("offerlayer v0.3 shop pay attach", () => {
       headers: {
         "content-type": "application/json",
         "x-shopify-topic": "refunds/create",
+        "x-shopify-shop-domain": "demo-towels.myshopify.com",
         "x-shopify-hmac-sha256": hmacShopify(shopSecret, refund),
       },
       body: refund,

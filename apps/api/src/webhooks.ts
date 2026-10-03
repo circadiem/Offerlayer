@@ -1,7 +1,8 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import type { DbHandle } from "@offerlayer/db";
-import { clawbackOrder, recordPaidOrder } from "./conversion-machine.ts";
-import { jsonError } from "./errors.ts";
+import { eq, merchants, webhookEvents, type DbHandle } from "@offerlayer/db";
+import { attributeOrder, attributedRefund, orderObject, type AttributedLine } from "./attribution.ts";
+import { applyRefund, findOrder, findTokenRow, loadOffer, recordPaidOrder } from "./conversion-machine.ts";
+import { ApiError, jsonError } from "./errors.ts";
 import { logJson } from "./logger.ts";
 
 export function verifyShopifyHmac(rawBody: string, hmacHeader: string | undefined, secret: string): boolean {
@@ -146,13 +147,13 @@ function shopifyOrderId(payload: unknown): string | null {
   return null;
 }
 
-function orderTotal(payload: unknown): { total: string; currency: string; emailHash?: string } {
-  const rec = (payload ?? {}) as Record<string, unknown>;
+function orderMoney(payload: unknown): { total: string; currency: string; email: string | null } {
+  const rec = orderObject(payload);
   const totalRaw = rec.total_price ?? rec.current_total_price ?? "0.00";
   const total = typeof totalRaw === "string" ? totalRaw : String(totalRaw);
   const currency = typeof rec.currency === "string" ? rec.currency : "USD";
-  const email = typeof rec.email === "string" ? rec.email : undefined;
-  return { total, currency, emailHash: email };
+  const email = typeof rec.email === "string" && rec.email.trim() ? rec.email : null;
+  return { total, currency, email };
 }
 
 function shopFromPayload(payload: unknown): string | null {
@@ -166,10 +167,33 @@ function shopFromPayload(payload: unknown): string | null {
   return null;
 }
 
+export type WebhookResult = {
+  ok: true;
+  conversion?: unknown;
+  ignored?: boolean;
+  reason?: string;
+  duplicate?: boolean;
+};
+
+/**
+ * Verified Shopify webhooks are the only production path that consumes a
+ * token or records a paid order.
+ *
+ * Business rejections (unknown or spent token, wrong shop, cap hit) are
+ * answered 200 with `ignored` and a reason: they are deterministic, and a
+ * non-2xx would make Shopify retry for days and eventually drop the
+ * subscription. Unexpected errors still return 5xx so Shopify retries.
+ */
 export function handleShopifyWebhook(
   handle: DbHandle,
-  args: { topic: string; rawBody: string; hmac: string | undefined },
-): { ok: true; conversion?: unknown; ignored?: boolean } {
+  args: {
+    topic: string;
+    rawBody: string;
+    hmac: string | undefined;
+    shopDomain?: string | null;
+    webhookId?: string | null;
+  },
+): WebhookResult {
   if (!verifyShopifyHmac(args.rawBody, args.hmac, handle.env.shopifyApiSecret)) {
     throw jsonError("HMAC_INVALID", "Shopify HMAC verification failed", 401);
   }
@@ -180,6 +204,47 @@ export function handleShopifyWebhook(
     throw jsonError("INVALID_JSON", "Webhook body is not JSON", 400);
   }
   const topic = args.topic.toLowerCase();
+  const shop = args.shopDomain?.trim().toLowerCase() || null;
+  const webhookId = args.webhookId?.trim() || null;
+
+  if (webhookId) {
+    const seen = handle.db.select().from(webhookEvents).where(eq(webhookEvents.webhookId, webhookId)).get();
+    if (seen) return { ...(JSON.parse(seen.resultJson) as WebhookResult), duplicate: true };
+  }
+
+  let result: WebhookResult;
+  try {
+    result = processWebhook(handle, topic, payload, shop);
+  } catch (err) {
+    if (!(err instanceof ApiError) || err.status >= 500) throw err;
+    logJson({
+      level: "warn",
+      msg: "WEBHOOK_REJECTED",
+      topic,
+      shop,
+      order_id: shopifyOrderId(payload),
+      reason: err.code,
+    });
+    result = { ok: true, ignored: true, reason: err.code };
+  }
+
+  if (webhookId) {
+    handle.db
+      .insert(webhookEvents)
+      .values({
+        webhookId,
+        topic,
+        shopDomain: shop,
+        resultJson: JSON.stringify(result),
+        receivedAt: new Date().toISOString(),
+      })
+      .onConflictDoNothing()
+      .run();
+  }
+  return result;
+}
+
+function processWebhook(handle: DbHandle, topic: string, payload: unknown, shop: string | null): WebhookResult {
   if (topic === "orders/paid") {
     const token = extractOrderToken(payload);
     if (!token) {
@@ -188,31 +253,67 @@ export function handleShopifyWebhook(
       logJson({
         level: "info",
         msg: "UNATTRIBUTED_PAID_ORDER",
-        shop: shopFromPayload(payload),
+        shop: shop ?? shopFromPayload(payload),
         order_id: shopifyOrderId(payload),
         ...(offerHint ? { offer_hint: offerHint } : {}),
       });
       return { ok: true, ignored: true };
     }
-    const money = orderTotal(payload);
+    if (!shop) throw jsonError("SHOP_DOMAIN_MISSING", "X-Shopify-Shop-Domain header is required", 400);
+    const money = orderMoney(payload);
+    let attributed: { total: string; lines: AttributedLine[] } | null = null;
+    const tokenRow = findTokenRow(handle, token);
+    if (tokenRow) {
+      const { row } = loadOffer(handle, tokenRow.offerId);
+      attributed = attributeOrder(payload, {
+        selectorType: row.selectorType,
+        selectorIds: JSON.parse(row.selectorIdsJson) as string[],
+        discountCode: tokenRow.discountCode,
+      });
+    }
     const conversion = recordPaidOrder(handle, {
       token,
-      orderTotal: money.total,
+      orderTotal: attributed?.total ?? money.total,
+      grossTotal: money.total,
+      attributedLines: attributed?.lines ?? null,
       currency: money.currency,
-      emailHash: money.emailHash,
+      email: money.email,
       shopifyOrderId: shopifyOrderId(payload),
+      expectedShop: shop,
+      ignoreExpiry: true,
     });
     return { ok: true, conversion };
   }
+
   if (topic === "orders/cancelled" || topic === "refunds/create") {
     const token = extractOrderToken(payload);
-    const orderId = shopifyOrderId(payload);
-    const result = clawbackOrder(handle, {
+    const order = findOrder(handle, {
       token: token ?? undefined,
-      shopifyOrderId: orderId ?? undefined,
+      shopifyOrderId: shopifyOrderId(payload) ?? undefined,
     });
-    if ("ignored" in result) return { ok: true, ignored: true };
-    return { ok: true, conversion: result };
+    if (!order) return { ok: true, ignored: true };
+    const merchant = handle.db.select().from(merchants).where(eq(merchants.id, order.merchantId)).get();
+    if (!shop || !merchant || merchant.shopDomain.toLowerCase() !== shop) {
+      throw jsonError("SHOP_MISMATCH", "Order belongs to a different shop", 409);
+    }
+    if (topic === "orders/cancelled") {
+      const result = applyRefund(handle, { order, full: true, refundId: "cancel" });
+      return "ignored" in result ? { ok: true, ignored: true } : { ok: true, conversion: result };
+    }
+    const lines = order.attributedLinesJson ? (JSON.parse(order.attributedLinesJson) as AttributedLine[]) : null;
+    const amountCents = attributedRefund(payload, {
+      total: order.total,
+      orderTotal: order.orderTotal,
+      lines,
+    });
+    const refund = asRecord(payload);
+    const refundId = refund && (typeof refund.id === "number" || typeof refund.id === "string") ? String(refund.id) : null;
+    // A refunds/create payload with no line items and no transactions (older
+    // fixtures) is treated as a full refund.
+    const unspecified =
+      !Array.isArray(refund?.refund_line_items) && !Array.isArray(refund?.transactions);
+    const result = applyRefund(handle, unspecified ? { order, full: true, refundId } : { order, amountCents, refundId });
+    return "ignored" in result ? { ok: true, ignored: true } : { ok: true, conversion: result };
   }
   return { ok: true, ignored: true };
 }

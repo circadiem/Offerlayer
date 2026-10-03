@@ -100,6 +100,56 @@ CREATE INDEX IF NOT EXISTS idx_mandates_seller_merchant ON mandates(seller_agent
   if (!merchantCols.some((c) => c.name === "catalog_json")) {
     sqlite.exec("ALTER TABLE merchants ADD COLUMN catalog_json TEXT");
   }
+  addColumns(sqlite, "agents", { rate_per_minute: "INTEGER", rate_per_day: "INTEGER" });
+  addColumns(sqlite, "tokens", {
+    issued_by: "TEXT",
+    discount_code: "TEXT",
+    discount_node_id: "TEXT",
+    discount_deleted_at: "TEXT",
+    discount_cleanup_error: "TEXT",
+  });
+  addColumns(sqlite, "orders_ext", {
+    order_total: "TEXT",
+    attributed_lines_json: "TEXT",
+    refunded_total: "TEXT NOT NULL DEFAULT '0.00'",
+  });
+  sqlite.exec(`
+CREATE INDEX IF NOT EXISTS idx_tokens_issued_by ON tokens(issued_by, created_at);
+CREATE INDEX IF NOT EXISTS idx_tokens_offer_created ON tokens(offer_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_token ON orders_ext(token_id);
+
+CREATE TABLE IF NOT EXISTS order_refunds (
+  id TEXT PRIMARY KEY,
+  order_ext_id TEXT NOT NULL REFERENCES orders_ext(id),
+  shopify_refund_id TEXT NOT NULL,
+  amount TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (order_ext_id, shopify_refund_id)
+);
+
+CREATE TABLE IF NOT EXISTS webhook_events (
+  webhook_id TEXT PRIMARY KEY,
+  topic TEXT NOT NULL,
+  shop_domain TEXT,
+  result_json TEXT NOT NULL,
+  received_at TEXT NOT NULL
+);
+`);
+  // Pre-launch cleanup: older builds stored the raw order email in
+  // email_hash. Drop those values rather than migrate them.
+  sqlite.exec(`
+UPDATE orders_ext SET email_hash = NULL WHERE email_hash LIKE '%@%';
+DELETE FROM principals WHERE email_hash LIKE '%@%';
+`);
+}
+
+function addColumns(sqlite: Database.Database, table: string, cols: Record<string, string>): void {
+  const existing = new Set(
+    (sqlite.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name),
+  );
+  for (const [name, type] of Object.entries(cols)) {
+    if (!existing.has(name)) sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
+  }
 }
 
 export function openDatabase(env: OfferlayerEnv = loadEnv()): DbHandle {

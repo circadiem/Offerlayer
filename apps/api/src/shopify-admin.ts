@@ -106,8 +106,17 @@ export function encryptAccessToken(token: string, secret: string): string {
   return encryptSecret(token, secret);
 }
 
-export function decryptAccessToken(blob: string, secret: string): string {
-  return decryptSecret(blob, secret);
+/**
+ * Decrypt with the current key, falling back to the previous one during a
+ * rotation. Pass `previous` as "" when there is none.
+ */
+export function decryptAccessToken(blob: string, secret: string, previous = ""): string {
+  try {
+    return decryptSecret(blob, secret);
+  } catch (err) {
+    if (!previous) throw err;
+    return decryptSecret(blob, previous);
+  }
 }
 
 export async function exchangeCodeForToken(args: {
@@ -289,14 +298,19 @@ const DISCOUNT_CREATE = `mutation discountCodeBasicCreate($basicCodeDiscount: Di
   }
 }`;
 
+export function discountTitle(offerId: string): string {
+  return `Offerlayer · agent checkout · ${offerId}`;
+}
+
 export async function createCheckoutDiscount(args: {
   shop: string;
   accessToken: string;
   code: string;
+  offerId: string;
   percent: string;
   productGid?: string | null;
   endsAt: string;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+}): Promise<{ ok: true; nodeId: string } | { ok: false; error: string }> {
   const shop = normalizeShopDomain(args.shop);
   const percent = Number(args.percent);
   if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
@@ -316,7 +330,7 @@ export async function createCheckoutDiscount(args: {
       query: DISCOUNT_CREATE,
       variables: {
         basicCodeDiscount: {
-          title: `Offerlayer ${args.code}`,
+          title: discountTitle(args.offerId),
           code: args.code,
           startsAt: new Date().toISOString(),
           endsAt: args.endsAt,
@@ -343,8 +357,52 @@ export async function createCheckoutDiscount(args: {
   const created = body.data?.discountCodeBasicCreate;
   const message =
     created?.userErrors?.find((e) => e.message)?.message ?? body.errors?.find((e) => e.message)?.message;
-  if (!res.ok || !created?.codeDiscountNode?.id || message) {
+  const nodeId = created?.codeDiscountNode?.id;
+  if (!res.ok || !nodeId || message) {
     return { ok: false, error: message ?? `Shopify discount failed (${res.status})` };
   }
-  return { ok: true };
+  return { ok: true, nodeId };
+}
+
+const DISCOUNT_DELETE = `mutation discountCodeDelete($id: ID!) {
+  discountCodeDelete(id: $id) {
+    deletedCodeDiscountId
+    userErrors { field code message }
+  }
+}`;
+
+/**
+ * Delete one code discount. A discount that no longer exists (merchant
+ * removed it by hand) counts as deleted.
+ */
+export async function deleteCheckoutDiscount(args: {
+  shop: string;
+  accessToken: string;
+  nodeId: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const shop = normalizeShopDomain(args.shop);
+  const res = await shopifyAdmin.fetch(`https://${shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json",
+      "x-shopify-access-token": args.accessToken,
+    },
+    body: JSON.stringify({ query: DISCOUNT_DELETE, variables: { id: args.nodeId } }),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    data?: {
+      discountCodeDelete?: {
+        deletedCodeDiscountId?: string | null;
+        userErrors?: { message?: string }[];
+      };
+    };
+    errors?: { message?: string }[];
+  };
+  const result = body.data?.discountCodeDelete;
+  if (result?.deletedCodeDiscountId) return { ok: true };
+  const message =
+    result?.userErrors?.find((e) => e.message)?.message ?? body.errors?.find((e) => e.message)?.message;
+  if (message && /does not exist|not found/i.test(message)) return { ok: true };
+  return { ok: false, error: message ?? `Shopify discount delete failed (${res.status})` };
 }

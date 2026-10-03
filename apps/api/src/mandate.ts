@@ -2,6 +2,8 @@ import {
   addMoney,
   compareMoney,
   computePayout,
+  fromCents,
+  toCents,
   newId,
   proposeMandateSchema,
   type MandateAllow,
@@ -11,11 +13,13 @@ import {
 import {
   and,
   eq,
+  gt,
+  inArray,
+  isNull,
   mandates,
   merchants,
   offers,
   ordersExt,
-  payouts,
   tokens,
   type DbHandle,
 } from "@offerlayer/db";
@@ -164,42 +168,135 @@ function worstCaseReward(write: MandateWrite): string {
   return computePayout({ type: "percent", amount: write.rewardAmount, orderTotal: base });
 }
 
-function dailyRewardUsed(
-  handle: DbHandle,
-  sellerAgentId: string,
-  merchantId: string,
-  now: Date,
-): string {
+function scopedOfferRows(handle: DbHandle, sellerAgentId: string, merchantId: string) {
   const sellerMandates = handle.db
     .select()
     .from(mandates)
     .where(and(eq(mandates.sellerAgentId, sellerAgentId), eq(mandates.merchantId, merchantId)))
     .all();
   const manIds = new Set(sellerMandates.map((m) => m.id));
-  const offerRows = handle.db.select().from(offers).where(eq(offers.merchantId, merchantId)).all();
-  const scoped = offerRows.filter((o) => o.mandateId && manIds.has(o.mandateId));
-  const offerIds = new Set(scoped.map((o) => o.id));
-  if (offerIds.size === 0) return "0.00";
+  return handle.db
+    .select()
+    .from(offers)
+    .where(eq(offers.merchantId, merchantId))
+    .all()
+    .filter((o) => o.mandateId && manIds.has(o.mandateId));
+}
+
+/**
+ * Buyer discount already spent today on this seller's offers for this shop:
+ * every paid order still standing (pending hold or cleared), net of refunds.
+ * Payout rows are only written when a hold clears, so they cannot be used here.
+ */
+function dailyRewardUsed(
+  handle: DbHandle,
+  sellerAgentId: string,
+  merchantId: string,
+  now: Date,
+): string {
+  const scoped = scopedOfferRows(handle, sellerAgentId, merchantId);
+  if (scoped.length === 0) return "0.00";
+  const byId = new Map(scoped.map((o) => [o.id, o]));
   const day = now.toISOString().slice(0, 10);
+  const tokenRows = handle.db
+    .select()
+    .from(tokens)
+    .where(inArray(tokens.offerId, [...byId.keys()]))
+    .all();
+  const offerByToken = new Map(tokenRows.map((t) => [t.tokenId, byId.get(t.offerId)]));
   let sum = "0.00";
-  const tokenRows = handle.db.select().from(tokens).all().filter((t) => offerIds.has(t.offerId));
-  const tokenIds = new Set(tokenRows.map((t) => t.tokenId));
   const orders = handle.db
     .select()
     .from(ordersExt)
+    .where(eq(ordersExt.merchantId, merchantId))
     .all()
     .filter(
       (o) =>
-        tokenIds.has(o.tokenId) &&
+        offerByToken.has(o.tokenId) &&
         (o.status === "pending_hold" || o.status === "cleared") &&
         o.paidAt.startsWith(day),
     );
   for (const order of orders) {
-    const pays = handle.db.select().from(payouts).where(eq(payouts.orderExtId, order.id)).all();
-    const buyer = pays.find((p) => p.party === "buyer");
-    if (buyer) sum = addMoney(sum, buyer.amount);
+    const offer = offerByToken.get(order.tokenId);
+    if (!offer) continue;
+    const net = fromCents(toCents(order.total) - toCents(order.refundedTotal ?? "0.00"));
+    if (net.startsWith("-")) continue;
+    sum = addMoney(
+      sum,
+      computePayout({ type: offer.rewardType as "flat" | "percent", amount: offer.rewardAmount, orderTotal: net }),
+    );
   }
   return sum;
+}
+
+/** Worst-case discount still claimable by issued, unused, unexpired checkouts. */
+function outstandingExposure(
+  handle: DbHandle,
+  sellerAgentId: string,
+  merchantId: string,
+  now: Date,
+): string {
+  const scoped = scopedOfferRows(handle, sellerAgentId, merchantId);
+  if (scoped.length === 0) return "0.00";
+  const byId = new Map(scoped.map((o) => [o.id, o]));
+  const nowSec = Math.floor(now.getTime() / 1000);
+  const open = handle.db
+    .select()
+    .from(tokens)
+    .where(and(inArray(tokens.offerId, [...byId.keys()]), isNull(tokens.consumedAt), gt(tokens.exp, nowSec)))
+    .all();
+  let sum = "0.00";
+  for (const t of open) {
+    const offer = byId.get(t.offerId);
+    if (!offer) continue;
+    sum = addMoney(sum, worstCaseReward(writeFromRow(offer)));
+  }
+  return sum;
+}
+
+function writeFromRow(row: typeof offers.$inferSelect): MandateWrite {
+  return {
+    selectorType: row.selectorType,
+    selectorIds: JSON.parse(row.selectorIdsJson) as string[],
+    rewardType: row.rewardType,
+    rewardAmount: row.rewardAmount,
+    finderFeeType: row.finderFeeType,
+    finderFeeAmount: row.finderFeeAmount,
+    clawbackDays: row.clawbackDays,
+    listPrice: row.listPrice,
+    action: "update",
+  };
+}
+
+/**
+ * Checkout-time enforcement. Mandates are checked when an offer is published,
+ * but a mandate can be revoked, amended down, or run out of daily budget after
+ * that. Re-check against the seller's current active mandate before minting a
+ * code, so changes take effect on existing offers immediately.
+ *
+ * Offers with no mandate (operator-created via /v1/internal) are not capped here.
+ */
+export function requireCheckoutWithinLimits(
+  handle: DbHandle,
+  offerRow: typeof offers.$inferSelect,
+  now = new Date(),
+): void {
+  if (!offerRow.mandateId) return;
+  const original = handle.db.select().from(mandates).where(eq(mandates.id, offerRow.mandateId)).get();
+  const current = original ? loadActiveMandate(handle, original.sellerAgentId, offerRow.merchantId, now) : null;
+  if (!original || !current) {
+    throw jsonError("OFFER_UNAVAILABLE", "The merchant's limits for this offer are not active", 409);
+  }
+  const caps = JSON.parse(current.capsJson) as MandateCaps;
+  if (capExceeded(offerRow.rewardType, offerRow.rewardAmount, caps.max_reward_flat, caps.max_reward_percent)) {
+    throw jsonError("OFFER_UNAVAILABLE", "This offer's discount is above the merchant's current limit", 409);
+  }
+  const used = dailyRewardUsed(handle, original.sellerAgentId, offerRow.merchantId, now);
+  const open = outstandingExposure(handle, original.sellerAgentId, offerRow.merchantId, now);
+  const projected = addMoney(addMoney(used, open), worstCaseReward(writeFromRow(offerRow)));
+  if (compareMoney(projected, caps.max_daily_liability) > 0) {
+    throw jsonError("BUDGET_EXHAUSTED", "The merchant's budget for this offer is used up for today", 409);
+  }
 }
 
 export function requireMandateForWrite(

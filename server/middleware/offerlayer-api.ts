@@ -140,7 +140,9 @@ export default async function offerlayerApi(
     const req = toFetchRequest(event);
     const res = await booted.app.fetch(req);
     const method = req.method.toUpperCase();
-    if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
+    // Vercel Cron calls jobs with GET, and jobs write.
+    const writes = (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") || path.startsWith("/v1/internal/jobs/");
+    if (writes) {
       await booted.persistAfterWrite().catch((err) => {
         log({ level: "error", msg: "persist_failed", error: safeMessage(err) });
       });
