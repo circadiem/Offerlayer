@@ -60,9 +60,9 @@ OFFERLAYER_URL=http://127.0.0.1:8787 OFFERLAYER_SELLER_KEY=agt_sell_... pnpm mcp
 > **Demo mode only.** These keys are public and are accepted only by hosts
 > running with `OFFERLAYER_DEMO=1` (local demos, `pnpm demo*`, the test
 > suite). A production host **refuses to boot** with them — it requires
-> operator-generated secrets (`TOKEN_SECRET`, `INTERNAL_API_KEY`, `DEMO_KEY`,
-> `DEMO_AGENT_KEY`, `MUSE_AGENT_KEY`, `SELLER_AGENT_KEY`; generate with
-> `openssl rand -hex 32`). Never paste a production key into a doc, chat, or
+> operator-generated secrets (`TOKEN_SIGNING_SECRET`, `ACCESS_TOKEN_ENCRYPTION_KEY`,
+> `PRINCIPAL_HASH_SECRET`, `INTERNAL_API_KEY`, `DEMO_AGENT_KEY`, `MUSE_AGENT_KEY`, `SELLER_AGENT_KEY`; generate with
+> `openssl rand -hex 32`; see `docs/SECRETS.md`). Never paste a production key into a doc, chat, or
 > repo.
 
 - Shopper demo: `agt_live_demo_v0_offerlayer_seed` (`agt_demo`) — Muse vault `OFFERLAYER_AGENT_KEY`
@@ -82,7 +82,7 @@ Set these on the host. None of the URLs may stay on localhost:
 SHOPIFY_API_KEY=...
 SHOPIFY_API_SECRET=...
 APP_URL=https://offerlayer.vercel.app
-TOKEN_SECRET=...          # encrypts merchant access tokens
+ACCESS_TOKEN_ENCRYPTION_KEY=...  # encrypts merchant access tokens (see docs/SECRETS.md)
 DATABASE_URL=postgres://...
 ```
 
