@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "idx_tokens_discount_code" ON "tokens" USING btree ("discount_code");

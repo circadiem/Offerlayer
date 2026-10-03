@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { eq, merchants, webhookEvents, type DbHandle } from "@offerlayer/db";
+import { eq, merchants, tokens, webhookEvents, type DbHandle } from "@offerlayer/db";
 import { attributeOrder, attributedRefund, orderObject, type AttributedLine } from "./attribution.ts";
 import { applyRefund, findOrder, findTokenRow, loadOffer, recordPaidOrder } from "./conversion-machine.ts";
 import { ApiError, jsonError } from "./errors.ts";
@@ -135,6 +135,46 @@ export function extractOrderToken(payload: unknown): string | null {
   return tokenFromNamedAttrs(collectLineItemAttrs(order), ["agent_ref"]);
 }
 
+/** Discount codes on an order, from `discount_codes` and `discount_applications`. */
+export function orderDiscountCodes(payload: unknown): string[] {
+  const order = asRecord(payload);
+  if (!order) return [];
+  const inner = asRecord(order.order);
+  const codes = new Set<string>();
+  for (const source of [order, inner]) {
+    if (!source) continue;
+    for (const d of attrsOf(source.discount_codes)) {
+      if (typeof d.code === "string" && d.code.trim()) codes.add(d.code.trim().toUpperCase());
+    }
+    for (const d of attrsOf(source.discount_applications)) {
+      if (typeof d.code === "string" && d.code.trim()) codes.add(d.code.trim().toUpperCase());
+    }
+  }
+  return [...codes];
+}
+
+/**
+ * The checkout token an order belongs to.
+ *
+ * 1. Our single-use discount code, if it is on the order. It is the strongest
+ *    evidence: it was minted for exactly one checkout and Shopify only lets it
+ *    apply once. It also survives checkout paths that drop cart attributes
+ *    (agentic checkouts that pass a code but no custom fields).
+ * 2. Otherwise the `agent_ref` attribute, note, or landing-site parameter.
+ */
+export async function resolveOrderToken(handle: DbHandle, payload: unknown): Promise<string | null> {
+  const codes = orderDiscountCodes(payload).filter((c) => c.startsWith("OL"));
+  for (const code of codes) {
+    const [row] = await handle.db
+      .select({ rawJws: tokens.rawJws })
+      .from(tokens)
+      .where(eq(tokens.discountCode, code)) // minted codes are stored uppercase
+      .limit(1);
+    if (row) return row.rawJws;
+  }
+  return extractOrderToken(payload);
+}
+
 function shopifyOrderId(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") return null;
   const rec = payload as Record<string, unknown>;
@@ -246,7 +286,7 @@ export async function handleShopifyWebhook(
 
 async function processWebhook(handle: DbHandle, topic: string, payload: unknown, shop: string | null): Promise<WebhookResult> {
   if (topic === "orders/paid") {
-    const token = extractOrderToken(payload);
+    const token = await resolveOrderToken(handle, payload);
     if (!token) {
       const notes = collectNoteAttributes(asRecord(payload) ?? {});
       const offerHint = namedAttrRaw(notes, ["offerlayer_offer"]);
@@ -286,7 +326,7 @@ async function processWebhook(handle: DbHandle, topic: string, payload: unknown,
   }
 
   if (topic === "orders/cancelled" || topic === "refunds/create") {
-    const token = extractOrderToken(payload);
+    const token = await resolveOrderToken(handle, payload);
     const order = await findOrder(handle, {
       token: token ?? undefined,
       shopifyOrderId: shopifyOrderId(payload) ?? undefined,
