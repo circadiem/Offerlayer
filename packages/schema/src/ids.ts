@@ -15,7 +15,8 @@ export type IdPrefix =
   | "lnk_"
   | "grn_"
   | "man_"
-  | "rfd_";
+  | "rfd_"
+  | "cmp_";
 
 export function newId(prefix: IdPrefix): string {
   return `${prefix}${nanoid()}`;

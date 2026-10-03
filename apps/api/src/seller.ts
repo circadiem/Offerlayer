@@ -267,6 +267,18 @@ function writeFromCreate(body: SellerCreateOfferInput): MandateWrite {
   };
 }
 
+/** Store the merchant's stacking choice in Shopify's DiscountCombinesWithInput shape. */
+function combinesJson(
+  input: { order_discounts: boolean; product_discounts: boolean; shipping_discounts: boolean } | undefined,
+): string | null {
+  if (!input) return null;
+  return JSON.stringify({
+    orderDiscounts: input.order_discounts,
+    productDiscounts: input.product_discounts,
+    shippingDiscounts: input.shipping_discounts,
+  });
+}
+
 function emptyBucket() {
   return { count: 0, gmv: "0.00", reward: "0.00", finder_fee: "0.00" };
 }
@@ -550,6 +562,7 @@ function registerSellerOfferRoutes(app: Hono, handle: DbHandle, auth: AuthFns) {
         checkoutUrlTemplate: template,
         ucp: merchant.accessTokenEnc ? 1 : 0,
         mandateId,
+        combinesWithJson: combinesJson(body.combines_with),
         createdAt: now,
         updatedAt: now,
       })
@@ -647,6 +660,7 @@ function registerSellerOfferRoutes(app: Hono, handle: DbHandle, auth: AuthFns) {
         ...(body.checkout?.tracked_url_template ? { checkoutUrlTemplate: body.checkout.tracked_url_template } : {}),
         ucp: merchant.accessTokenEnc ? 1 : row.ucp,
         mandateId,
+        ...(body.combines_with ? { combinesWithJson: combinesJson(body.combines_with) } : {}),
         updatedAt: now,
       })
       .where(eq(offers.id, id))

@@ -4,6 +4,7 @@ import { attributeOrder, attributedRefund, orderObject, type AttributedLine } fr
 import { applyRefund, findOrder, findTokenRow, loadOffer, recordPaidOrder } from "./conversion-machine.ts";
 import { ApiError, jsonError } from "./errors.ts";
 import { logJson } from "./logger.ts";
+import { handleLifecycleWebhook, LIFECYCLE_TOPICS } from "./shop-lifecycle.ts";
 
 export function verifyShopifyHmac(rawBody: string, hmacHeader: string | undefined, secret: string): boolean {
   if (!hmacHeader) return false;
@@ -285,6 +286,7 @@ export async function handleShopifyWebhook(
 }
 
 async function processWebhook(handle: DbHandle, topic: string, payload: unknown, shop: string | null): Promise<WebhookResult> {
+  if (LIFECYCLE_TOPICS.has(topic)) return handleLifecycleWebhook(handle, topic, payload);
   if (topic === "orders/paid") {
     const token = await resolveOrderToken(handle, payload);
     if (!token) {

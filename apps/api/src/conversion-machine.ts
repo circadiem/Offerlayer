@@ -38,7 +38,9 @@ import { requireCheckoutWithinLimits } from "./mandate.ts";
 import {
   createCheckoutDiscount,
   decryptAccessToken,
+  NO_COMBINING,
   oneTimeDiscountCode,
+  type DiscountCombines,
 } from "./shopify-admin.ts";
 
 export function trackedUrl(template: string, token: string): string {
@@ -226,7 +228,6 @@ export async function issueCheckout(
   let discountCode: string | undefined;
   if (merchant.accessTokenEnc && offer.reward.type === "percent") {
     const code = oneTimeDiscountCode();
-    const productGid = (offer.selector.ids ?? []).find((id) => /\/Product\//i.test(id)) ?? null;
     try {
       const accessToken = decryptAccessToken(
         merchant.accessTokenEnc,
@@ -239,7 +240,10 @@ export async function issueCheckout(
         code,
         offerId: offer.id,
         percent: offer.reward.amount,
-        productGid,
+        selector: { type: offer.selector.type, ids: offer.selector.ids ?? [] },
+        combinesWith: row.combinesWithJson
+          ? (JSON.parse(row.combinesWithJson) as DiscountCombines)
+          : NO_COMBINING,
         endsAt: new Date(issued.payload.exp * 1000).toISOString(),
       });
       if (created.ok) {

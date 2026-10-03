@@ -40,6 +40,8 @@ export async function cleanupExpiredDiscounts(
     .where(
       and(
         isNotNull(tokens.discountNodeId),
+        // Uninstalled shops: our token is revoked, so there is nothing to retry.
+        isNotNull(merchants.accessTokenEnc),
         isNull(tokens.discountDeletedAt),
         isNull(tokens.consumedAt),
         lt(tokens.exp, nowSec),

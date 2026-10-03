@@ -4,14 +4,22 @@ application_url = "https://api.offerlayer.io"
 embedded = true
 
 [access_scopes]
+# Minimal: read the catalog to build offers, receive order webhooks for
+# attribution, create the single-use discount codes.
 scopes = "read_products,read_orders,write_discounts"
 
 [auth]
 redirect_urls = [ "https://api.offerlayer.io/auth/callback" ]
 
 [webhooks]
-api_version = "2025-01"
+# Keep in sync with SHOPIFY_API_VERSION in apps/api/src/shopify-admin.ts.
+api_version = "2026-10"
 
   [[webhooks.subscriptions]]
-  topics = [ "orders/paid", "orders/cancelled", "refunds/create" ]
+  topics = [ "orders/paid", "orders/cancelled", "refunds/create", "app/uninstalled" ]
+  uri = "https://api.offerlayer.io/v1/webhooks/shopify"
+
+  # Mandatory privacy webhooks for App Store apps.
+  [[webhooks.subscriptions]]
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
   uri = "https://api.offerlayer.io/v1/webhooks/shopify"
